@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "scout"
+version = "0.1.0"
+description = "Scout – a lightweight, terminal-first Windows automation assistant"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "psutil>=5.9",
+    "pyautogui>=0.9",
+    "pygetwindow>=0.0.9",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+scout = "scout.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

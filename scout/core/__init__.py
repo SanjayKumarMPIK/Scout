@@ -1,0 +1,1 @@
+"""Scout core subpackage."""
