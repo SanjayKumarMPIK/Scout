@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -14,6 +15,7 @@ class Command:
     usage: str
     description: str
     aliases: list[str] = field(default_factory=list)
+    group: str = "General"
 
 
 class Registry:
@@ -30,6 +32,7 @@ class Registry:
         usage: str = "",
         description: str = "",
         aliases: list[str] | None = None,
+        group: str = "General",
     ) -> None:
         cmd = Command(
             name=name,
@@ -37,6 +40,7 @@ class Registry:
             usage=usage or name,
             description=description,
             aliases=aliases or [],
+            group=group,
         )
         self._commands[name] = cmd
         for alias in cmd.aliases:
@@ -54,6 +58,18 @@ class Registry:
                 seen.add(cmd.name)
                 out.append(cmd)
         return sorted(out, key=lambda c: c.name)
+
+    def by_group(self) -> dict[str, list[Command]]:
+        """Return commands grouped by their group label, each list sorted by name."""
+        groups: dict[str, list[Command]] = defaultdict(list)
+        seen: set[str] = set()
+        for cmd in self._commands.values():
+            if cmd.name not in seen:
+                seen.add(cmd.name)
+                groups[cmd.group].append(cmd)
+        for cmds in groups.values():
+            cmds.sort(key=lambda c: c.name)
+        return dict(groups)
 
 
 # Singleton used throughout Scout.

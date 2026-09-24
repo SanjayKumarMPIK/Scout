@@ -60,4 +60,5 @@ registry.register(
     handler=_run_cmd,
     usage="run <command>",
     description="Run a shell command (with safety checks).",
+    group="System",
 )

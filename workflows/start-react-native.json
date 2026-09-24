@@ -1,0 +1,15 @@
+{
+  "name": "start-react-native",
+  "description": "Start the React Native development environment",
+  "steps": [
+    {
+      "action": "project_open",
+      "project": "expense"
+    },
+    {
+      "action": "project_run",
+      "project": "expense",
+      "command": "npm start"
+    }
+  ]
+}

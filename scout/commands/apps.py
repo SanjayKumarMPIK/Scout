@@ -62,4 +62,5 @@ registry.register(
     handler=_open_cmd,
     usage="open <application>",
     description="Open an application (e.g. chrome, vscode, notepad).",
+    group="System",
 )

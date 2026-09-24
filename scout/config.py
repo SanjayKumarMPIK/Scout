@@ -18,7 +18,7 @@ SCREENSHOT_DIR.mkdir(exist_ok=True)
 # then as an absolute path.
 APP_ALIASES: dict[str, list[str]] = {
     "chrome":   ["chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe"],
-    "firefox":  ["firefox", r"C:\Program Files\Mozilla Firefox\firefox.exe"],
+    "firefox":  ["firefox", r"C:\Users\rhino\.cache\selenium\firefox\win64\155.0\firefox.exe"],
     "edge":     ["msedge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"],
     "vscode":   ["code"],
     "code":     ["code"],

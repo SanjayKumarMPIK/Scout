@@ -34,6 +34,7 @@ registry.register(
     handler=_type_cmd,
     usage="type <text>",
     description="Type text via the keyboard.",
+    group="Automation",
 )
 
 
@@ -89,6 +90,7 @@ registry.register(
     handler=_press_cmd,
     usage="press <key|combo>",
     description="Press a key or combination (e.g. enter, ctrl+c, alt+tab).",
+    group="Automation",
 )
 
 
@@ -110,4 +112,5 @@ registry.register(
     usage="screenshot",
     description="Take a screenshot and save it.",
     aliases=["ss"],
+    group="Automation",
 )

@@ -58,4 +58,5 @@ registry.register(
     usage="files [directory]",
     description="List files in the current or specified directory.",
     aliases=["ls", "dir"],
+    group="System",
 )

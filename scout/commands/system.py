@@ -48,4 +48,5 @@ registry.register(
     usage="system",
     description="Display system information (CPU, memory, battery, OS).",
     aliases=["sys", "sysinfo"],
+    group="System",
 )

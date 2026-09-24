@@ -13,26 +13,51 @@ from scout.core.executor import execute
 from scout.core.registry import registry
 
 # ── Import command modules so they self-register ───────────────────────
-import scout.commands.system       # noqa: F401
-import scout.commands.apps         # noqa: F401
-import scout.commands.terminal     # noqa: F401
-import scout.commands.files        # noqa: F401
-import scout.commands.automation   # noqa: F401
+import scout.commands.system        # noqa: F401
+import scout.commands.apps          # noqa: F401
+import scout.commands.terminal      # noqa: F401
+import scout.commands.files         # noqa: F401
+import scout.commands.automation    # noqa: F401
+import scout.commands.workflow_cmd  # noqa: F401
+import scout.commands.projects      # noqa: F401
+import scout.commands.git_cmd       # noqa: F401
+import scout.commands.development   # noqa: F401
+import scout.commands.ai_cmd        # noqa: F401
 
 console = Console()
+
+# ── Help group display order ───────────────────────────────────────────
+_GROUP_ORDER = ["AI Agent", "System", "Project", "Development", "Git", "Automation", "Workflow", "General"]
+
 
 # ── Built-in commands (registered here, not in separate files) ─────────
 
 def _help_cmd(args: list[str]) -> None:
-    """Show available commands."""
+    """Show available commands grouped by category."""
+    groups = registry.by_group()
+
     console.print()
-    console.print("[bold cyan]Available commands[/]\n")
-    for cmd in registry.all_unique():
-        aliases = ""
-        if cmd.aliases:
-            aliases = f" [dim]({', '.join(cmd.aliases)})[/dim]"
-        console.print(f"  [bold]{cmd.usage:<24}[/] {cmd.description}{aliases}")
-    console.print()
+    for group_name in _GROUP_ORDER:
+        cmds = groups.pop(group_name, None)
+        if not cmds:
+            continue
+        console.print(f"  [bold cyan]{group_name.upper()}[/]")
+        for cmd in cmds:
+            aliases = ""
+            if cmd.aliases:
+                aliases = f" [dim]({', '.join(cmd.aliases)})[/dim]"
+            console.print(f"    [bold]{cmd.usage:<28}[/] {cmd.description}{aliases}")
+        console.print()
+
+    # Any remaining groups not in _GROUP_ORDER
+    for group_name, cmds in sorted(groups.items()):
+        console.print(f"  [bold cyan]{group_name.upper()}[/]")
+        for cmd in cmds:
+            aliases = ""
+            if cmd.aliases:
+                aliases = f" [dim]({', '.join(cmd.aliases)})[/dim]"
+            console.print(f"    [bold]{cmd.usage:<28}[/] {cmd.description}{aliases}")
+        console.print()
 
 
 def _clear_cmd(args: list[str]) -> None:
