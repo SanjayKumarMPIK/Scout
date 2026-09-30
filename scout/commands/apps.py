@@ -15,7 +15,19 @@ console = Console()
 
 def _resolve_app(name: str) -> str | None:
     """Return the first working executable path for *name*, or None."""
-    candidates = APP_ALIASES.get(name.lower(), [name])
+    name_lower = name.lower()
+    candidates = APP_ALIASES.get(name_lower)
+    
+    # Substring match if exact match fails
+    if not candidates:
+        for alias, paths in APP_ALIASES.items():
+            if alias in name_lower or name_lower in alias:
+                candidates = paths
+                break
+                
+    if not candidates:
+        candidates = [name]
+        
     for candidate in candidates:
         # Try PATH lookup first
         found = shutil.which(candidate)

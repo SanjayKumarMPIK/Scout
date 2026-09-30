@@ -1,4 +1,4 @@
-"""AI interpreter and execution loop."""
+"""AI interpreter and autonomous agent loop."""
 
 from __future__ import annotations
 
@@ -8,20 +8,15 @@ from typing import Any
 from rich.console import Console
 from rich.prompt import Confirm
 
-from scout.ai.context import gather_context
-from scout.ai.prompts import SYSTEM_PROMPT
 from scout.ai.provider import AIProvider
-from scout.ai.schemas import AIAction, AIPlan, parse_and_validate_plan
-from scout.core.safety import confirm_destructive, is_destructive
-from scout.workflow.actions import StepResult, execute_step
-from scout.workflow.parser import WorkflowStep
+from scout.ai.tools import get_tools, execute_tool
 
 console = Console()
 
 # ── Risk levels ────────────────────────────────────────────────────────
 
-SAFE = {"system_info", "project_info", "git_status", "git_log", "git_diff", "git_branch", "open_app", "screenshot", "open_url", "project_open"}
-CONFIRM = {"run_command", "project_run", "git_pull", "git_commit", "workflow_run", "type", "press", "wait", "change_directory"}
+SAFE = {"computer", "list_windows", "get_active_window", "find_window", "minimize_window", "maximize_window", "list_files", "read_file", "system_info", "project_info", "git_status", "git_log", "git_branch", "open_application", "open_url", "project_open", "complete_task", "verify_screen"}
+CONFIRM = {"close_window", "run_command", "project_run", "git_pull", "git_commit", "write_file", "create_directory", "change_directory"}
 HIGH_RISK = {"git_push"}
 
 def _get_risk_level(action_type: str) -> str:
@@ -29,141 +24,186 @@ def _get_risk_level(action_type: str) -> str:
         return "SAFE"
     if action_type in HIGH_RISK:
         return "HIGH_RISK"
-    # Default to CONFIRM for anything unknown or in CONFIRM set
     return "CONFIRM"
 
+SYSTEM_PROMPT = """You are Scout, a Windows computer automation agent.
+You have access to a set of tools to control the computer, read files, and execute commands.
+Your objective is to fulfill the user's request.
 
-# ── Interpreter ────────────────────────────────────────────────────────
+# Rules
+1. ALWAYS inspect tool results. If a tool fails, try a different approach.
+2. NEVER pretend an action succeeded if it did not.
+3. DO NOT output conversational filler or explain your plans. Generating text takes time; ONLY output the JSON tool calls unless you are responding to a conversational greeting.
+4. When you have successfully completed the user's objective, call the `complete_task` tool with a summary response.
+5. NEVER call `complete_task` in the same turn as other tools. You must wait to observe the results of your actions first.
+6. Before calling `complete_task`, validate that:
+   - A task-relevant action actually occurred and succeeded.
+   - You are not claiming success for a UI operation (like search or submit) merely because typing/clicking succeeded. Use `verify_screen` to visually confirm important UI changes.
+   - If visual verification is impossible, mark the task as "unverified" rather than falsely claiming verified success.
+7. Computer actions must be performed in the correct target application. Before keyboard or mouse actions, determine the relevant target window. If the target is not active, use `computer({action: 'activate_window', title: '...'})` and verify it before interacting.
+8. Never assume the terminal is the intended target.
+9. Maintain the current task's target application/window across turns unless the user explicitly switches applications.
+10. DO NOT output XML tags like <tool_response>. If a task fails, reason about it and perform a corrective action using registered tools.
+11. CONVERSATION VS ACTION: If the user says a simple greeting (like "Hello", "Hi", "How are you?"), DO NOT call any tools. Just respond with normal plain text (e.g. "Hello! How can I help you?"). ONLY use tools if the user actually asks you to do something, check something, or get information.
+12. PREFER HEADLESS TOOLS: If you need to create, read, or edit a file (especially writing code), ALWAYS use `write_file`, `read_file`, or `run_command`. NEVER use UI automation (like opening Notepad and typing) to create files unless explicitly requested. UI automation is slow and brittle.
+13. WINDOWS ENVIRONMENT: You are running on Windows. When using `run_command`, you MUST use valid Windows command prompt or PowerShell syntax (e.g., use `move` instead of `mv`, `copy` instead of `cp`, `dir` instead of `ls`).
+14. SCREEN VERIFICATION: Do not verify trivial headless actions (like reading a file). Only use `verify_screen` for high-value visual changes (opening apps, navigating browsers, checking UI state after a click).
+15. DO NOT INSTRUCT THE USER: NEVER tell the user how to do something manually (e.g. "Please open Task Manager"). You are an automation agent. You must execute the necessary tools yourself to fulfill the request. If you don't know how to do it, say so, but do not give the user instructions to perform the task manually.
+16. UNIFIED COMPUTER CONTROL: Use the single `computer` tool for all desktop UI actions (screenshot, click, double_click, move, drag, type, key, hotkey, scroll, activate_window). When combining this with vision, use: `computer({action: "screenshot"})` -> Vision provider -> `computer({action: "click", x: ..., y: ...})`.
+"""
 
 class AIInterpreter:
-    def __init__(self, provider: AIProvider):
+    def __init__(self, provider: AIProvider, system_prompt: str = SYSTEM_PROMPT):
         self.provider = provider
         self.messages: list[dict[str, Any]] = []
+        self.system_prompt = system_prompt
 
-    def _build_system_prompt(self) -> str:
-        ctx = gather_context()
-        return SYSTEM_PROMPT.replace("{context}", ctx)
+    def _inject_memory(self, request: str) -> None:
+        from scout.memory.store import get_memory_store
+        mem_store = get_memory_store()
+        mem_block = mem_store.get_relevant_memories(request)
+        
+        if mem_block:
+            # We wrap the user's request with the memory context
+            request = f"{mem_block}\n\nUSER REQUEST:\n{request}"
+            
+        self.messages.append({"role": "user", "content": request})
 
     def ask(self, request: str) -> None:
-        """One-shot request."""
-        self.messages = [{"role": "user", "content": request}]
+        self.messages = []
+        self._inject_memory(request)
         self._run_loop()
 
     def chat_turn(self, request: str) -> None:
-        """A single turn in an ongoing chat session."""
-        self.messages.append({"role": "user", "content": request})
+        self._inject_memory(request)
         self._run_loop()
 
     def _run_loop(self) -> None:
-        """The core AI execution loop."""
-        sys_prompt = self._build_system_prompt()
-        max_turns = 5
-        
-        with console.status("[bold cyan]AI is thinking...[/]"):
-            raw_response = self.provider.generate_plan(sys_prompt, self.messages)
-            self.messages.append({"role": "assistant", "content": raw_response})
+        max_iterations = 15
+        invalid_response_retries = 0
+        tools = get_tools()
 
-        for _ in range(max_turns):
-            try:
-                plan = parse_and_validate_plan(raw_response)
-            except ValueError as e:
-                console.print(f"[red]AI returned invalid plan schema:[/] {e}")
-                # Inform AI of schema error
-                self.messages.append({"role": "user", "content": f"Schema Error: {e}\nPlease correct the format and try again."})
-                with console.status("[bold cyan]AI is correcting format...[/]"):
-                    raw_response = self.provider.generate_plan(sys_prompt, self.messages)
-                    self.messages.append({"role": "assistant", "content": raw_response})
-                continue
-            
-            # 1. Show AI's message
-            console.print(f"\n[bold cyan]SCOUT AI:[/] {plan.message}")
+        console.print("[dim]Scout: AI agent online.[/dim]")
 
-            if not plan.actions:
-                # No actions to execute, turn is complete.
-                break
+        try:
+            for _ in range(max_iterations):
+                with console.status("[bold cyan]AI is thinking...[/]"):
+                    try:
+                        response = self.provider.chat_completion(self.system_prompt, self.messages, tools=tools)
+                    except Exception as e:
+                        console.print(f"[red]Error communicating with AI:[/] {e}")
+                        return
 
-            # 2. Iterate actions and confirm if needed
-            for i, act in enumerate(plan.actions):
-                console.print(f"\n[bold yellow]Action {i+1}:[/] {act.action_type}")
-                if act.params:
-                    console.print(f"[dim]{json.dumps(act.params, indent=2)}[/dim]")
-
-                risk = _get_risk_level(act.action_type)
-                proceed = True
-
-                # Additional dynamic risk check for shell commands
-                if act.action_type in ("run_command", "project_run"):
-                    cmd = act.params.get("command", "")
-                    if is_destructive(cmd):
-                        risk = "HIGH_RISK"
-
-                if risk == "HIGH_RISK":
-                    console.print("[bold red][!] HIGH RISK ACTION[/]")
-                    proceed = Confirm.ask("[bold red]Execute this action?[/]", default=False)
-                elif risk == "CONFIRM":
-                    proceed = Confirm.ask("[yellow]Execute this action?[/]", default=True)
-
-                if not proceed:
-                    console.print("[yellow]Action cancelled by user.[/]")
-                    self.messages.append({
-                        "role": "user", 
-                        "content": f"Action {act.action_type} was cancelled by the user. Stop this plan."
-                    })
-                    return  # abort the whole plan on cancellation
-
-                # 3. Execute
-                result = self._execute_action(act)
+                choice = response.get("choices", [{}])[0].get("message", {})
                 
-                # Report result back to user
-                if result.success:
-                    console.print(f"[green]✓ Success:[/] {result.message}")
-                else:
-                    console.print(f"[red]✗ Failed:[/] {result.message}")
+                if not choice:
+                    choice = {"role": "assistant"}
+                elif "role" not in choice:
+                    choice["role"] = "assistant"
+
+                # Sanitize content: OpenRouter/Nvidia complains if content is null
+                if choice.get("content") is None:
+                    choice["content"] = ""
                     
-                # 4. Report result back to AI so it can chain actions
-                self.messages.append({
-                    "role": "user", 
-                    "content": f"Result of {act.action_type}: {'SUCCESS' if result.success else 'FAILED'} - {result.message}"
-                })
+                self.messages.append(choice)
 
-                if not result.success:
-                    break # Stop executing further actions in this plan if one fails
+                if choice.get("content"):
+                    content = choice["content"].strip()
+                    if content:
+                        console.print(f"\n[bold cyan]Scout:[/] {content}")
+                        if not choice.get("tool_calls"):
+                            return  # End of turn
 
-            # Loop back to AI to let it synthesize results or plan next steps
-            with console.status("[bold cyan]AI is evaluating results...[/]"):
-                raw_response = self.provider.generate_plan(sys_prompt, self.messages)
-                self.messages.append({"role": "assistant", "content": raw_response})
+                tool_calls = choice.get("tool_calls", [])
+                if not tool_calls:
+                    # No tools called and no content? Break.
+                    break
 
-    def _execute_action(self, act: AIAction) -> StepResult:
-        """Map an AIAction to a WorkflowStep and execute it."""
-        # For specials that aren't strictly workflow actions, we handle them here or map them.
-        
-        # Git commands mapping
-        if act.action_type.startswith("git_"):
-            sub = act.action_type.split("_", 1)[1]
-            proj = act.params.get("project")
-            msg = act.params.get("message")
-            cmd = f"git {sub}"
-            if msg:
-                cmd += f" -m '{msg}'"
-            # Map it to a project_run to reuse executor safety logic
-            step = WorkflowStep(1, "project_run", {"project": proj, "command": cmd}, {})
-            return execute_step(step)
+                # Filter out premature complete_task calls if accompanied by other tools
+                if any(tc["function"]["name"] == "complete_task" for tc in tool_calls) and len(tool_calls) > 1:
+                    tool_calls = [tc for tc in tool_calls if tc["function"]["name"] != "complete_task"]
+                    console.print("\n[dim]Intercepted premature complete_task. Forcing observation of results...[/dim]")
 
-        # system_info mapping
-        if act.action_type == "system_info":
-            from scout.commands.system import _system_cmd
-            _system_cmd([])
-            return StepResult(True, "Displayed system info")
+                # Handle tool calls
+                for i, tool_call in enumerate(tool_calls):
+                    func_name = tool_call["function"]["name"]
+                    args_str = tool_call["function"]["arguments"]
+                    try:
+                        args = json.loads(args_str)
+                    except json.JSONDecodeError:
+                        args = {}
 
-        # project_info mapping
-        if act.action_type == "project_info":
-            proj = act.params.get("project")
-            from scout.commands.projects import _project_info
-            _project_info([proj])
-            return StepResult(True, f"Displayed info for {proj}")
+                    console.print(f"\n[bold yellow][TOOL][/] {func_name}({args_str})")
 
-        # Normal workflow action
-        step = WorkflowStep(1, act.action_type, act.params, {})
-        return execute_step(step)
+                    if func_name == "complete_task":
+                        # Special exit tool
+                        msg = args.get("response", "Task completed.")
+                        console.print(f"\n[bold cyan]Scout:[/] {msg}")
+                        # Add result back to messages to satisfy API expectations
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id", "0"),
+                            "name": func_name,
+                            "content": "Task completed successfully."
+                        })
+                        return
+
+                    # Check safety
+                    risk = _get_risk_level(func_name)
+                    proceed = True
+                    
+                    # Check command safety
+                    if func_name == "run_command":
+                        cmd = args.get("command", "")
+                        from scout.core.safety import is_destructive
+                        if is_destructive(cmd):
+                            risk = "HIGH_RISK"
+
+                    if risk == "HIGH_RISK":
+                        proceed = Confirm.ask(f"[bold red]Allow HIGH RISK action '{func_name}'?[/]", default=False)
+                    elif risk == "CONFIRM":
+                        proceed = Confirm.ask(f"[yellow]Allow action '{func_name}'?[/]", default=True)
+
+                    if not proceed:
+                        console.print("\n[yellow]AI action cancelled by user.[/yellow]")
+                        # Cleanup the rest of the pending tool calls
+                        for pending_tc in tool_calls[i:]:
+                            self.messages.append({
+                                "role": "tool",
+                                "tool_call_id": pending_tc.get("id", "0"),
+                                "name": pending_tc["function"]["name"],
+                                "content": "ERROR: Action cancelled by user."
+                            })
+                        return
+
+                    # Execute
+                    result = execute_tool(func_name, args)
+                    if result.success:
+                        console.print(f"[green][RESULT] success:[/green] {result.message}")
+                    else:
+                        console.print(f"[red][RESULT] failed:[/red] {result.message}")
+
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", "0"),
+                        "name": func_name,
+                        "content": result.message if result.success else f"ERROR: {result.message}"
+                    })
+
+            else:
+                console.print("[red]Agent reached maximum iterations without completing the task.[/red]")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]AI action cancelled by user.[/yellow]")
+            # Cleanup dangling tool calls to keep API history valid
+            if self.messages and self.messages[-1].get("tool_calls"):
+                for tc in self.messages[-1]["tool_calls"]:
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", "0"),
+                        "name": tc["function"]["name"],
+                        "content": "ERROR: Execution interrupted by user."
+                    })
+            return
+
 

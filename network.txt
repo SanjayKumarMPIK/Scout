@@ -1,0 +1,64 @@
+
+Windows IP Configuration
+
+   Host Name . . . . . . . . . . . . : SANJAYsV16
+   Primary Dns Suffix  . . . . . . . : 
+   Node Type . . . . . . . . . . . . : Hybrid
+   IP Routing Enabled. . . . . . . . : No
+   WINS Proxy Enabled. . . . . . . . : No
+
+Ethernet adapter Ethernet 2:
+
+   Connection-specific DNS Suffix  . : 
+   Description . . . . . . . . . . . : VirtualBox Host-Only Ethernet Adapter
+   Physical Address. . . . . . . . . : 0A-00-27-00-00-09
+   DHCP Enabled. . . . . . . . . . . : No
+   Autoconfiguration Enabled . . . . : Yes
+   Link-local IPv6 Address . . . . . : fe80::5a43:de92:a2e4:cd58%9(Preferred) 
+   IPv4 Address. . . . . . . . . . . : 192.168.56.1(Preferred) 
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 
+   DHCPv6 IAID . . . . . . . . . . . : 688521255
+   DHCPv6 Client DUID. . . . . . . . : 00-01-00-01-31-15-DE-EB-00-0F-C9-38-FD-10
+   NetBIOS over Tcpip. . . . . . . . : Enabled
+
+Wireless LAN adapter Local Area Connection* 1:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+   Description . . . . . . . . . . . : Microsoft Wi-Fi Direct Virtual Adapter
+   Physical Address. . . . . . . . . : F2-68-E3-E4-0D-64
+   DHCP Enabled. . . . . . . . . . . : Yes
+   Autoconfiguration Enabled . . . . : Yes
+
+Wireless LAN adapter Wi-Fi:
+
+   Connection-specific DNS Suffix  . : 
+   Description . . . . . . . . . . . : Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
+   Physical Address. . . . . . . . . : F0-68-E3-E4-0D-64
+   DHCP Enabled. . . . . . . . . . . : Yes
+   Autoconfiguration Enabled . . . . : Yes
+   IPv6 Address. . . . . . . . . . . : 2409:40f4:1c:3cf1:df1f:f1e2:c5a9:fc10(Preferred) 
+   Temporary IPv6 Address. . . . . . : 2409:40f4:1c:3cf1:fc69:980a:9240:46d1(Preferred) 
+   Link-local IPv6 Address . . . . . : fe80::566f:dcb3:795a:d97d%3(Preferred) 
+   IPv4 Address. . . . . . . . . . . : 10.169.198.144(Preferred) 
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Lease Obtained. . . . . . . . . . : 25 September 2026 20:27:36
+   Lease Expires . . . . . . . . . . : 25 September 2026 21:27:36
+   Default Gateway . . . . . . . . . : fe80::989a:49ff:fe3c:e5dc%3
+                                       10.169.198.52
+   DHCP Server . . . . . . . . . . . : 10.169.198.52
+   DHCPv6 IAID . . . . . . . . . . . : 66087139
+   DHCPv6 Client DUID. . . . . . . . : 00-01-00-01-31-15-DE-EB-00-0F-C9-38-FD-10
+   DNS Servers . . . . . . . . . . . : 10.169.198.52
+                                       2409:40f4:1c:3cf1::3c
+   NetBIOS over Tcpip. . . . . . . . : Enabled
+
+Ethernet adapter Bluetooth Network Connection:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+   Description . . . . . . . . . . . : Bluetooth Device (Personal Area Network)
+   Physical Address. . . . . . . . . : F0-68-E3-E4-0D-65
+   DHCP Enabled. . . . . . . . . . . : Yes
+   Autoconfiguration Enabled . . . . : Yes

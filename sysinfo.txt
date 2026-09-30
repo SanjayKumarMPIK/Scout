@@ -1,0 +1,4 @@
+Battery: 100%
+CPU: Intel(R) Core(TM) 5 210H - Load 14%
+RAM: 3.04 MB free / 15.61 MB total
+Drive C: 147.75 GB free, 327.31 GB used

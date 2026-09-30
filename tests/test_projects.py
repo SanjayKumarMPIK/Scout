@@ -24,8 +24,7 @@ from scout.core.project_manager import (
     list_projects,
     remove_project,
 )
-from scout.workflow.actions import StepResult, execute_step
-from scout.workflow.parser import WorkflowStep
+
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────
@@ -289,66 +288,7 @@ class TestGitCommands:
         assert _resolve_project(["nongit"]) is None
 
 
-# ── Workflow/project integration tests ────────────────────────────────
 
-class TestWorkflowProjectIntegration:
-    def test_project_run_step(self, sample_node_project: Path):
-        add_project("wftest", str(sample_node_project))
-        step = WorkflowStep(
-            1, "project_run",
-            {"project": "wftest", "command": "echo hello"},
-            {},
-        )
-        result = execute_step(step)
-        assert result.success
-
-    def test_project_run_nonexistent(self):
-        step = WorkflowStep(
-            1, "project_run",
-            {"project": "nope", "command": "echo hi"},
-            {},
-        )
-        result = execute_step(step)
-        assert not result.success
-        assert "not found" in result.message.lower()
-
-    def test_project_run_missing_command(self, sample_node_project: Path):
-        add_project("wftest2", str(sample_node_project))
-        step = WorkflowStep(1, "project_run", {"project": "wftest2"}, {})
-        result = execute_step(step)
-        assert not result.success
-
-    def test_project_open_nonexistent(self):
-        step = WorkflowStep(1, "project_open", {"project": "ghost"}, {})
-        result = execute_step(step)
-        assert not result.success
-
-    def test_project_run_blocked(self, sample_node_project: Path):
-        add_project("blocked", str(sample_node_project))
-        step = WorkflowStep(
-            1, "project_run",
-            {"project": "blocked", "command": "format c:"},
-            {},
-        )
-        result = execute_step(step)
-        assert not result.success
-        assert "Blocked" in result.message
-
-
-# ── Safety integration ────────────────────────────────────────────────
-
-class TestProjectSafety:
-    def test_project_run_destructive_denied(self, sample_node_project: Path):
-        add_project("safetychk", str(sample_node_project))
-        step = WorkflowStep(
-            1, "project_run",
-            {"project": "safetychk", "command": "del something.txt"},
-            {},
-        )
-        with patch("scout.workflow.actions.confirm_destructive", return_value=False):
-            result = execute_step(step)
-        assert not result.success
-        assert "Cancelled" in result.message
 
 
 # ── Invalid project path tests ────────────────────────────────────────

@@ -1,0 +1,77 @@
+
+Host Name:                     SANJAYSV16
+OS Name:                       Microsoft Windows 11 Home Single Language
+OS Version:                    10.0.26200 N/A Build 26200
+OS Manufacturer:               Microsoft Corporation
+OS Configuration:              Standalone Workstation
+OS Build Type:                 Multiprocessor Free
+Registered Owner:              rhinosanjai@gmail.com
+Registered Organization:       N/A
+Product ID:                    00342-42915-67126-AAOEM
+Original Install Date:         06-07-2026, 12:04:32
+System Boot Time:              27-09-2026, 12:16:10
+System Manufacturer:           ASUSTeK COMPUTER INC.
+System Model:                  ASUS Vivobook 16 V3607VU_V3607VU
+System Type:                   x64-based PC
+Processor(s):                  1 Processor(s) Installed.
+                               [01]: Intel64 Family 6 Model 186 Stepping 2 GenuineIntel ~2200 Mhz
+BIOS Version:                  American Megatrends International, LLC. V3607VU.304, 27-08-2025
+Windows Directory:             C:\Windows
+System Directory:              C:\Windows\system32
+Boot Device:                   \Device\HarddiskVolume1
+System Locale:                 en-us;English (United States)
+Input Locale:                  00004009
+Time Zone:                     (UTC+05:30) Chennai, Kolkata, Mumbai, New Delhi
+Total Physical Memory:         15,980 MB
+Available Physical Memory:     2,726 MB
+Virtual Memory: Max Size:      24,426 MB
+Virtual Memory: Available:     4,636 MB
+Virtual Memory: In Use:        19,790 MB
+Page File Location(s):         C:\pagefile.sys
+Domain:                        WORKGROUP
+Logon Server:                  \\SANJAYSV16
+Hotfix(s):                     5 Hotfix(s) Installed.
+                               [01]: KB5126052
+                               [02]: KB5054156
+                               [03]: KB5095189
+                               [04]: KB5129195
+                               [05]: KB5124007
+Network Card(s):               3 NIC(s) Installed.
+                               [01]: Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
+                                     Connection Name: Wi-Fi
+                                     DHCP Enabled:    Yes
+                                     DHCP Server:     192.168.0.1
+                                     IP address(es)
+                                     [01]: 192.168.0.117
+                                     [02]: fe80::566f:dcb3:795a:d97d
+                                     [03]: 2406:7400:ca:f476:b12e:800f:a29d:7b31
+                                     [04]: 2406:7400:ca:f476:1d6f:30e1:1a9c:527
+                                     [05]: 2406:7400:ca:f476:8b90:5b85:26eb:f205
+                               [02]: Bluetooth Device (Personal Area Network)
+                                     Connection Name: Bluetooth Network Connection
+                                     Status:          Media disconnected
+                               [03]: VirtualBox Host-Only Ethernet Adapter
+                                     Connection Name: Ethernet 2
+                                     DHCP Enabled:    No
+                                     IP address(es)
+                                     [01]: 192.168.56.1
+                                     [02]: fe80::5a43:de92:a2e4:cd58
+Virtualization-based security: Status: Running
+                               Required Security Properties:
+                                     Base Virtualization Support
+                               Available Security Properties:
+                                     Base Virtualization Support
+                                     Secure Boot
+                                     DMA Protection
+                                     UEFI Code Readonly
+                                     SMM Security Mitigations 1.0
+                                     Mode Based Execution Control
+                                     APIC Virtualization
+                               Services Configured:
+                                     Hypervisor enforced Code Integrity
+                               Services Running:
+                                     Hypervisor enforced Code Integrity
+                               App Control for Business policy: Enforced
+                               App Control for Business user mode policy: Off
+                               Security Features Enabled:
+Hyper-V Requirements:          A hypervisor has been detected. Features required for Hyper-V will not be displayed.

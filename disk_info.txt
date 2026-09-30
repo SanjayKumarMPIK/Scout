@@ -1,0 +1,9 @@
+
+
+DeviceID   : C:
+VolumeName : OS
+Size       : 510088515584
+FreeSpace  : 160948273152
+
+
+

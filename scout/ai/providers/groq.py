@@ -12,14 +12,12 @@ from scout.ai.provider import AIProvider
 class GroqProvider(AIProvider):
     """Provider for Groq's fast API, using OpenAI's compatibility endpoint."""
 
-    def __init__(self, model: str, api_key_env: str = "SCOUT_GROQ_API_KEY"):
-        super().__init__(model, api_key_env)
+    def __init__(self, model: str):
+        super().__init__("groq", model)
         self.endpoint = "https://api.groq.com/openai/v1/chat/completions"
 
     def _make_request(self, payload: dict) -> dict:
         key = self.get_api_key()
-        if not key:
-            raise ValueError(f"API key missing. Set {self.api_key_env} in your environment.")
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -45,25 +43,41 @@ class GroqProvider(AIProvider):
         except Exception as e:
             raise RuntimeError(f"Unexpected error communicating with Groq: {str(e)}")
 
-    def generate_plan(self, system_prompt: str, messages: list[dict]) -> str:
+    def _make_request_with_retry(self, payload: dict) -> dict:
+        import time
+        max_retries = 4
+        for attempt in range(max_retries):
+            try:
+                return self._make_request(payload)
+            except RuntimeError as e:
+                if "429" in str(e):
+                    if attempt < max_retries - 1:
+                        backoff = 5 * (attempt + 1)  # 5, 10, 15
+                        print(f"[dim]Groq 429 Rate Limit. Retrying in {backoff}s...[/dim]")
+                        time.sleep(backoff)
+                        continue
+                raise
+
+    def chat_completion(self, system_prompt: str, messages: list[dict], tools: list[dict] = None) -> dict:
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt}
             ] + messages,
             "temperature": 0.0,
-            "response_format": {"type": "json_object"},
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
 
-        res = self._make_request(payload)
-        try:
-            return res["choices"][0]["message"]["content"]
-        except (KeyError, IndexError):
-            raise RuntimeError(f"Unexpected response format from Groq: {res}")
+        res = self._make_request_with_retry(payload)
+        return res
 
     def test_connection(self) -> tuple[bool, str]:
-        if not self.get_api_key():
-            return False, f"API key missing ({self.api_key_env} environment variable not set)"
+        try:
+            self.get_api_key()
+        except ValueError as e:
+            return False, str(e)
 
         payload = {
             "model": self.model,

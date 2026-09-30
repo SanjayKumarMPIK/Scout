@@ -1,0 +1,8 @@
+
+EstimatedChargeRemaining BatteryStatus
+------------------------ -------------
+                     100             2
+                                      
+                                      
+
+

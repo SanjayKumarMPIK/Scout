@@ -15,12 +15,7 @@ _DEFAULT_CONFIG: dict = {
     "projects": {
         "native": r"C:\PROJECTS\Native\android",
         "web": r"C:\PROJECTS\Web",
-    },
-    "ai": {
-        "provider": "groq",
-        "model": "openai/gpt-oss-120b",
-        "api_key_env": "SCOUT_GROQ_API_KEY",
-    },
+    }
 }
 
 
@@ -37,6 +32,10 @@ def load_config() -> dict:
         return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return _DEFAULT_CONFIG.copy()
+
+def save_config(config: dict) -> None:
+    """Save the configuration dictionary to config.json."""
+    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def resolve_variables(text: str, config: dict | None = None) -> str:
