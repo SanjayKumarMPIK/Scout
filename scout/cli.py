@@ -13,20 +13,12 @@ from scout.core.executor import execute
 from scout.core.registry import registry
 
 # ── Import command modules so they self-register ───────────────────────
-import scout.commands.system        # noqa: F401
-import scout.commands.apps          # noqa: F401
-import scout.commands.terminal      # noqa: F401
-import scout.commands.files         # noqa: F401
-import scout.commands.automation    # noqa: F401
-import scout.commands.projects      # noqa: F401
-import scout.commands.git_cmd       # noqa: F401
-import scout.commands.development   # noqa: F401
 import scout.commands.ai_cmd        # noqa: F401
 
 console = Console()
 
 # ── Help group display order ───────────────────────────────────────────
-_GROUP_ORDER = ["AI Agent", "System", "Project", "Development", "Git", "Automation", "General"]
+_GROUP_ORDER = ["AI Agent", "General"]
 
 
 # ── Built-in commands (registered here, not in separate files) ─────────

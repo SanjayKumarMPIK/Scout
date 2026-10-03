@@ -51,14 +51,26 @@ class GeminiProvider(AIProvider):
                         continue
                     else:
                         current_model = payload.get("model", "")
-                        if current_model != "gemini-3.8-flash":
-                            fallback = "gemini-3.8-flash"
-                        elif current_model != "gemini-3.8-flash-lite":
-                            fallback = "gemini-3.8-flash-lite"
+                        fallback_chain = [
+                            "gemini-flash-lite-latest",
+                            "gemini-flash-latest",
+                            "gemini-3.5-flash",
+                            "gemini-3.6-flash",
+                            "gemini-3.7-flash",
+                            "gemini-3.8-flash"
+                        ]
+                        
+                        fallback = None
+                        if current_model in fallback_chain:
+                            idx = fallback_chain.index(current_model)
+                            if idx + 1 < len(fallback_chain):
+                                fallback = fallback_chain[idx + 1]
                         else:
-                            raise RuntimeError(f"Gemini API Error ({e.code}): {error_body}")
+                            fallback = fallback_chain[0]
                             
-                        console.print(f"\n[yellow]Gemini model '{current_model}' is overloaded (503/429). Falling back to {fallback}...[/yellow]")
+                        if not fallback:
+                            raise RuntimeError(f"Gemini API Error ({e.code}): {error_body}")
+                        console.print(f"  [dim yellow]⚠ {current_model} overloaded, falling back to {fallback}...[/dim yellow]")
                         payload["model"] = fallback
                         attempt = 0  # Reset retries for the new model
                         continue

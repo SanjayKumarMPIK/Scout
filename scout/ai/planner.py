@@ -65,9 +65,16 @@ class Planner:
         
     def generate_plan(self, request: str, memory_context: str = "") -> list[str]:
         """Generate a plan from the user's request."""
+        from scout.memory.store import get_memory_store
+        mem_store = get_memory_store()
+        mem_block = mem_store.get_relevant_memories(request)
+        
         system_prompt = PLANNER_PROMPT
         if memory_context:
             system_prompt += f"\n\n# Relevant Context/Memory\n{memory_context}"
+            
+        if mem_block:
+            request = f"{mem_block}\n\nUSER REQUEST:\n{request}"
             
         messages = [{"role": "user", "content": request}]
         tools = get_planner_tools()

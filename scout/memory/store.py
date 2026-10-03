@@ -101,14 +101,28 @@ class MemoryStore:
     def search(self, query: str) -> list[dict[str, str]]:
         """Search memories by key or value substring (case-insensitive)."""
         conn = self._get_conn()
-        pattern = f"%{query}%"
-        rows = conn.execute(
-            """SELECT category, key, value FROM memories
-               WHERE key LIKE ? OR value LIKE ?
-               ORDER BY updated DESC LIMIT 20""",
-            (pattern, pattern),
-        ).fetchall()
-        return [{"category": r["category"], "key": r["key"], "value": r["value"]} for r in rows]
+        
+        # Tokenize query to search by keywords rather than full sentence match
+        words = [w for w in query.replace("?", "").replace(".", "").replace(",", "").split() if len(w) > 3]
+        if not words:
+            # Fallback to the whole query if it's very short
+            words = [query]
+            
+        results = []
+        for word in words:
+            pattern = f"%{word}%"
+            rows = conn.execute(
+                """SELECT category, key, value FROM memories
+                   WHERE key LIKE ? OR value LIKE ?
+                   ORDER BY updated DESC LIMIT 10""",
+                (pattern, pattern),
+            ).fetchall()
+            for r in rows:
+                results.append({"category": r["category"], "key": r["key"], "value": r["value"]})
+                
+        # Deduplicate
+        unique = {f"{r['category']}:{r['key']}": r for r in results}
+        return list(unique.values())
 
     def get_by_category(self, category: str) -> list[dict[str, str]]:
         """Get all memories in a category."""
@@ -140,11 +154,11 @@ class MemoryStore:
             if "preferred_development_style" in profile:
                 lines.append(f"Dev style: {profile['preferred_development_style']}")
 
-        # Search for query-relevant memories (max 5)
+        # Search for query-relevant memories
         if query:
             results = self.search(query)
             seen = set()
-            for r in results[:5]:
+            for r in results[:10]: # Increased from 5
                 if r["category"] == "user_profile":
                     continue  # Already included above
                 entry = f"{r['key']}: {r['value']}"
@@ -152,9 +166,9 @@ class MemoryStore:
                     seen.add(entry)
                     lines.append(entry)
 
-        # Include preferences (max 3)
+        # Include all general preferences (up to a safe limit of 30 so we don't blow up context)
         prefs = self.get_by_category("preferences")
-        for p in prefs[:3]:
+        for p in prefs[:30]:
             entry = f"Preference: {p['key']} = {p['value']}"
             if entry not in lines:
                 lines.append(entry)

@@ -143,7 +143,8 @@ def tool_run_command(command: str, cwd: str = "") -> StepResult:
         return StepResult(False, "Cancelled by user")
 
     try:
-        result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, cwd=cwd or None)
+        ps_cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
+        result = subprocess.run(ps_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=cwd or None)
         out = ""
         if result.stdout:
             out += result.stdout.rstrip() + "\n"

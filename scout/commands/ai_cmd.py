@@ -52,22 +52,25 @@ def _ask_cmd(args: list[str]) -> None:
             console.print("[red]Planner failed to generate a plan. Aborting.[/]")
             return
             
-        console.print("\n[dim magenta]Execution Plan:[/]")
-        for i, step in enumerate(plan):
-            console.print(f"  [dim]{i+1}. {step}[/dim]")
+        plan_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        console.print(Panel(Markdown(plan_md), title="[dim magenta]⚙ Execution Plan[/]", title_align="left", border_style="dim magenta", padding=(0, 2), style="dim"))
             
         plan_str = f"USER REQUEST: {request}\n\nEXECUTOR PLAN TO FOLLOW:\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
         
         try:
             executor.ask(plan_str)
         except Exception as e:
-            console.print(f"[red]Execution Error:[/] {e}")
+            from rich.markup import escape
+            console.print(f"[red]Execution Error:[/] {escape(str(e))}")
     else:
         interpreter = _get_interpreter()
         try:
             interpreter.ask(request)
         except Exception as e:
-            console.print(f"[red]AI Error:[/] {e}")
+            from rich.markup import escape
+            console.print(f"[red]AI Error:[/] {escape(str(e))}")
 
 
 def _handle_slash_command(cmd_line: str) -> bool:
@@ -400,8 +403,8 @@ def _chat_cmd(args: list[str]) -> None:
     
     while True:
         try:
-            req = console.input("\n[bold green]You:[/] ")
-            req = req.strip()
+            from rich.prompt import Prompt
+            req = Prompt.ask("\n[bold green]❯ You[/]").strip()
             if not req:
                 continue
                 
@@ -435,22 +438,39 @@ def _chat_cmd(args: list[str]) -> None:
                 else:
                     interpreter.provider = exec_prov
                 
-                # Get the last few execution messages as context for the planner
-                mem_context = "Recent Execution Log:\n"
-                for msg in interpreter.messages[-5:]:
-                    if msg.get("role") == "user":
-                        mem_context += f"User/Plan: {msg.get('content')}\n"
-                    elif msg.get("role") == "assistant" and msg.get("content"):
-                        mem_context += f"Executor: {msg.get('content')}\n"
+                # Get a comprehensive recent execution log for the planner
+                mem_context = "Recent Execution Log (Context for planning):\n"
+                for msg in interpreter.messages[-20:]:
+                    role = msg.get("role")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        # The user message usually contains "USER REQUEST: ... \n\n EXECUTOR PLAN..."
+                        # We just want to remind the planner of the raw user request if possible
+                        if "USER REQUEST:" in content:
+                            req_part = content.split("EXECUTOR PLAN TO FOLLOW:")[0].strip()
+                            mem_context += f"User: {req_part}\n"
+                        else:
+                            mem_context += f"User: {content}\n"
+                    elif role == "assistant":
+                        if content:
+                            mem_context += f"Executor (Spoke): {content}\n"
+                        if "tool_calls" in msg:
+                            for tc in msg["tool_calls"]:
+                                func = tc.get("function", {}).get("name", "")
+                                args = tc.get("function", {}).get("arguments", "")
+                                mem_context += f"Executor (Tool Call): {func}({args})\n"
+                    elif role == "tool":
+                        mem_context += f"System (Tool Result): {content[:300]}...\n"
                 
                 plan = planner.generate_plan(req, memory_context=mem_context)
                 if not plan:
                     console.print("[red]Planner failed to generate a plan.[/]")
                     continue
                     
-                console.print("\n[dim magenta]Execution Plan:[/]")
-                for i, step in enumerate(plan):
-                    console.print(f"  [dim]{i+1}. {step}[/dim]")
+                plan_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
+                from rich.panel import Panel
+                from rich.markdown import Markdown
+                console.print(Panel(Markdown(plan_md), title="[dim magenta]⚙ Execution Plan[/]", title_align="left", border_style="dim magenta", padding=(0, 2), style="dim"))
                     
                 plan_str = f"USER REQUEST: {req}\n\nEXECUTOR PLAN TO FOLLOW:\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
                 interpreter.chat_turn(plan_str)
@@ -463,7 +483,8 @@ def _chat_cmd(args: list[str]) -> None:
             console.print("\n[dim]Chat session ended.[/dim]")
             break
         except Exception as e:
-            console.print(f"[red]AI Error:[/] {e}")
+            from rich.markup import escape
+            console.print(f"[red]AI Error:[/] {escape(str(e))}")
 
 def _ai_status_cmd(args: list[str]) -> None:
     """Check AI configuration and connection status."""

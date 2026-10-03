@@ -110,7 +110,10 @@ class AIInterpreter:
                 if choice.get("content"):
                     content = choice["content"].strip()
                     if content:
-                        console.print(f"\n[bold cyan]Scout:[/] {content}")
+                        from rich.markdown import Markdown
+                        from rich.panel import Panel
+                        console.print("\n[bold cyan]Scout[/]")
+                        console.print(Panel(Markdown(content), border_style="cyan"))
                         if not choice.get("tool_calls"):
                             return  # End of turn
 
@@ -133,12 +136,16 @@ class AIInterpreter:
                     except json.JSONDecodeError:
                         args = {}
 
-                    console.print(f"\n[bold yellow][TOOL][/] {func_name}({args_str})")
+                    from rich.panel import Panel
+                    console.print(Panel(f"[dim]{args_str}[/dim]", title=f"[bold yellow]⚙ {func_name}[/]", title_align="left", border_style="yellow", padding=(0, 1)))
 
                     if func_name == "complete_task":
                         # Special exit tool
                         msg = args.get("response", "Task completed.")
-                        console.print(f"\n[bold cyan]Scout:[/] {msg}")
+                        from rich.markdown import Markdown
+                        from rich.panel import Panel
+                        console.print("\n[bold cyan]Scout[/]")
+                        console.print(Panel(Markdown(msg), border_style="cyan"))
                         # Add result back to messages to satisfy API expectations
                         self.messages.append({
                             "role": "tool",
