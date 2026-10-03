@@ -1,0 +1,4 @@
+﻿CPU: Intel(R) Core(TM) 5 210H
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+RAM: 16.00 GB
+Storage (C:): 475.06 GB

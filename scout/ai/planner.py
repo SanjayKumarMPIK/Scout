@@ -3,36 +3,102 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from dataclasses import dataclass, field
 
 from rich.console import Console
+from rich.markup import escape
 
 from scout.ai.provider import AIProvider
 
 console = Console()
 
-PLANNER_PROMPT = """You are Scout Planner, the high-level reasoning engine for a Windows computer automation agent.
-Your objective is to take the user's ambiguous request and translate it into a strict, step-by-step execution plan.
-You have access to a single tool: `submit_plan`. You MUST use this tool to output your plan.
+# Tools the executor uses internally; never assigned by the planner.
+_INTERNAL_TOOLS = {"complete_task", "step_done", "step_failed"}
 
-# Available Execution Tools (for your reference)
-The execution agent (which will receive your plan) has access to the following tools:
-- computer(action: str, [title: str], [text: str], [x: int], [y: int], [hotkey: str]) - Controls mouse, keyboard, and windows.
-- list_windows() - Returns a list of all visible window titles.
-- list_files(directory: str) - Lists files in a directory.
-- read_file(path: str) - Reads the contents of a file.
-- write_file(path: str, content: str) - Creates or overwrites a file.
-- run_command(command: str) - Executes a PowerShell command.
-- verify_screen(expected_state: str) - Captures a screenshot and visually verifies if the expected state is true.
 
-# Planning Rules
-1. Break down the user's objective into a logical sequence of discrete steps.
-2. The executor agent is "blind" by default and only follows your instructions. You must instruct it to verify its state (e.g., using `list_windows`, `verify_screen`, or `run_command` to check output) if needed.
-3. Keep the plan as simple and linear as possible.
-4. Output the plan by calling `submit_plan` with a list of step descriptions. Be highly specific in your descriptions (e.g., "Open notepad using run_command", "Type 'hello world' using computer type_text").
+@dataclass
+class PlanStep:
+    description: str
+    tools: list[str] = field(default_factory=list)
 
-Example of a good plan step: "Use run_command to execute 'start notepad'. Then use computer to activate the 'Untitled - Notepad' window."
+
+@dataclass
+class Plan:
+    mode: str  # "execute" | "respond"
+    steps: list[PlanStep] = field(default_factory=list)
+    response: str = ""
+
+
+PLANNER_PROMPT = """You are Scout Planner, the reasoning engine of a Windows computer-automation agent.
+You decide HOW each user request is handled and write the exact plan the executor will follow.
+The executor runs your steps literally, ONE AT A TIME, in order, and may ONLY use the tools you assign to each step.
+It never sees the rest of the plan while executing a step, so every step must be self-contained.
+
+You MUST reply by calling `submit_plan` exactly once. Never reply with plain text.
+
+# Modes
+- mode="respond": no computer actions are needed - greetings, general knowledge, questions answerable from the
+  memory/context below, or requests that are TRULY impossible with the available tools. Put the complete answer for
+  the user in `response` and leave `steps` empty.
+- mode="execute": actions are required. Provide `steps`; leave `response` empty. ALWAYS prefer this mode if there is ANY possible automation path to achieve the user's goal.
+
+# Executor tools (exact names and parameters)
+{tool_reference}
+
+# Capability limits
+- There is NO web search, web browsing or page-reading tool. The executor cannot fetch or read web content.
+  `open_url` only opens a page in the user's browser; it returns no page content.
+- If a request needs live internet data, use mode="respond" and say so plainly - unless the user only asked to
+  open a page/site, in which case plan an `open_url` step.
+
+# Step rules
+1. One step = one concrete action, with concrete values (exact command, path, window title, text, keys).
+2. `tools` = the exact tool name(s) from the list above the executor may use for that step. Usually just one.
+3. Only plan what the listed tools can actually do. Do NOT add a final "report/summarize/complete task" step -
+   reporting to the user happens automatically after the last step.
+4. Add verification steps (list_windows, get_active_window, verify_screen, a run_command check) only where the
+   outcome matters for later steps.
+5. Use facts already present in the memory/context instead of planning steps to look them up.
+6. Windows only: run_command executes PowerShell, so use PowerShell syntax.
+7. Prefer headless tools (run_command, read_file, write_file) over UI automation for files and data.
+8. Keep the plan minimal: the fewest steps that reliably achieve the goal.
+
+# STRICT Automation Policy
+- ALWAYS try to automate the user's request. 
+- NEVER tell the user to do something manually (e.g. "Please open the file yourself", "You can do this by...", "I am unable to do this").
+- If the user gives a command, you MUST formulate an `execute` plan to attempt it, even if it might fail. DO NOT give up before trying.
 """
+
+
+def _build_tool_reference() -> str:
+    """Describe the executor's real tools so the plan always matches what exists."""
+    from scout.ai.tools import get_tools
+
+    lines = []
+    for schema in get_tools():
+        fn = schema["function"]
+        if fn["name"] in _INTERNAL_TOOLS:
+            continue
+        props = fn.get("parameters", {}).get("properties", {})
+        required = set(fn.get("parameters", {}).get("required", []))
+        params = []
+        for pname, pinfo in props.items():
+            ptype = pinfo.get("type", "any")
+            params.append(f"{pname}: {ptype}" if pname in required else f"[{pname}: {ptype}]")
+        line = f"- {fn['name']}({', '.join(params)}) - {fn.get('description', '')}"
+        action = props.get("action", {})
+        if action.get("enum"):
+            line += f" Actions: {', '.join(action['enum'])}."
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _valid_tool_names() -> set[str]:
+    from scout.ai.tools import get_tools
+
+    return {t["function"]["name"] for t in get_tools()} - _INTERNAL_TOOLS
+
 
 def get_planner_tools() -> list[dict]:
     return [
@@ -40,66 +106,203 @@ def get_planner_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "submit_plan",
-                "description": "Submit the finalized step-by-step execution plan.",
+                "description": "Submit how the request will be handled: a direct response, or a step-by-step plan.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["execute", "respond"],
+                            "description": "'respond' to answer directly without actions, 'execute' to run steps.",
+                        },
+                        "response": {
+                            "type": "string",
+                            "description": "The full answer to the user (mode='respond' only).",
+                        },
                         "steps": {
                             "type": "array",
+                            "description": "Ordered steps for the executor (mode='execute' only).",
                             "items": {
-                                "type": "string",
-                                "description": "A specific, actionable step for the executor."
+                                "type": "object",
+                                "properties": {
+                                    "description": {
+                                        "type": "string",
+                                        "description": "One specific, self-contained action with concrete values.",
+                                    },
+                                    "tools": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Exact executor tool name(s) allowed for this step.",
+                                    },
+                                },
+                                "required": ["description", "tools"],
                             },
-                            "description": "The sequential list of steps to execute."
-                        }
+                        },
                     },
-                    "required": ["steps"]
-                }
-            }
+                    "required": ["mode"],
+                },
+            },
         }
     ]
+
 
 class Planner:
     def __init__(self, provider: AIProvider):
         self.provider = provider
-        
-    def generate_plan(self, request: str, memory_context: str = "") -> list[str]:
-        """Generate a plan from the user's request."""
+
+    # ── Public API ─────────────────────────────────────────────────────
+
+    def generate_plan(self, request: str, memory_context: str = "") -> Plan | None:
+        """Plan how to handle the user's request. Returns None on hard failure."""
+        return self._request_plan(request, request, memory_context)
+
+    def revise_plan(
+        self,
+        request: str,
+        history: list[tuple[PlanStep, str, str]],
+        remaining: list[PlanStep],
+        memory_context: str = "",
+    ) -> Plan | None:
+        """Re-plan after a step failed.
+
+        ``history`` holds (step, status, result) for every step attempted so far.
+        """
+        lines = [f"ORIGINAL USER REQUEST:\n{request}\n", "PROGRESS SO FAR:"]
+        for i, (step, status, result) in enumerate(history, 1):
+            lines.append(f"{i}. [{status.upper()}] {step.description}\n   Result: {result}")
+        if remaining:
+            lines.append("\nSTEPS NOT YET RUN (from the previous plan):")
+            lines.extend(f"- {s.description}" for s in remaining)
+        lines.append(
+            "\nThe last step FAILED. Submit a revised plan containing ONLY the steps still needed to finish the "
+            "request (do not repeat completed steps). Use a different approach for the failed part. If the request "
+            "cannot be completed with the available tools, use mode='respond' and explain why."
+        )
+        return self._request_plan("\n".join(lines), request, memory_context, status_text="Planner is revising the plan...")
+
+    # ── Internals ──────────────────────────────────────────────────────
+
+    def _request_plan(
+        self,
+        prompt: str,
+        memory_query: str,
+        memory_context: str,
+        status_text: str | None = None,
+    ) -> Plan | None:
         from scout.memory.store import get_memory_store
-        mem_store = get_memory_store()
-        mem_block = mem_store.get_relevant_memories(request)
-        
-        system_prompt = PLANNER_PROMPT
+
+        mem_block = get_memory_store().get_relevant_memories(memory_query)
+
+        system_prompt = PLANNER_PROMPT.replace("{tool_reference}", _build_tool_reference())
         if memory_context:
-            system_prompt += f"\n\n# Relevant Context/Memory\n{memory_context}"
-            
-        if mem_block:
-            request = f"{mem_block}\n\nUSER REQUEST:\n{request}"
-            
-        messages = [{"role": "user", "content": request}]
+            system_prompt += f"\n\n# Recent Conversation / Execution Context\n{memory_context}"
+
+        user_content = f"{mem_block}\n\nUSER REQUEST:\n{prompt}" if mem_block else prompt
+        messages: list[dict] = [{"role": "user", "content": user_content}]
         tools = get_planner_tools()
-        
+        status_text = status_text or f"Planner ({self.provider.__class__.__name__}) is generating the plan..."
+
+        last_text = ""
         try:
-            with console.status(f"[dim]Planner ({self.provider.__class__.__name__}) is generating execution plan...[/dim]"):
-                response = self.provider.chat_completion(system_prompt, messages, tools)
-            choice = response.get("choices", [{}])[0].get("message", {})
-            
-            tool_calls = choice.get("tool_calls", [])
-            for call in tool_calls:
-                if call.get("function", {}).get("name") == "submit_plan":
-                    args = call["function"]["arguments"]
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            console.print("[red]Planner returned invalid JSON for the plan.[/]")
-                            return []
-                    return args.get("steps", [])
-                    
-            # If no tool call, maybe the model just outputted text. We could parse it, but for now:
-            console.print("[yellow]Planner did not use the submit_plan tool. Falling back to treating its response as a single step.[/yellow]")
-            return [choice.get("content", "")]
-            
-        except Exception as e:
-            console.print(f"[red]Planner failed:[/] {e}")
-            return []
+            for attempt in range(2):
+                with console.status(f"[dim]{status_text}[/dim]"):
+                    response = self.provider.chat_completion(system_prompt, messages, tools)
+                message = response.get("choices", [{}])[0].get("message", {}) or {}
+
+                plan = self._parse_tool_call(message)
+                if plan:
+                    return plan
+
+                last_text = (message.get("content") or "").strip()
+                plan = self._parse_json_text(last_text)
+                if plan:
+                    return plan
+
+                if attempt == 0:
+                    # One corrective retry: the model must use submit_plan.
+                    messages.append({"role": "assistant", "content": last_text or "(no output)"})
+                    messages.append({
+                        "role": "user",
+                        "content": "You did not call `submit_plan`. Call `submit_plan` now with either "
+                                   "mode='respond' (and the full answer) or mode='execute' (and the steps).",
+                    })
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]Planner failed:[/] {escape(str(e))}")
+            return None
+
+        return self._parse_plain_text(last_text)
+
+    def _parse_tool_call(self, message: dict) -> Plan | None:
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function", {})
+            if fn.get("name") != "submit_plan":
+                continue
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    continue
+            plan = self._plan_from_dict(args)
+            if plan:
+                return plan
+        return None
+
+    def _parse_json_text(self, text: str) -> Plan | None:
+        """Some models write the submit_plan arguments as JSON text instead of a tool call."""
+        if "{" not in text:
+            return None
+        start, end = text.find("{"), text.rfind("}")
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+        if isinstance(data, dict) and isinstance(data.get("arguments"), dict):
+            data = data["arguments"]
+        if isinstance(data, dict) and isinstance(data.get("parameters"), dict):
+            data = data["parameters"]
+        return self._plan_from_dict(data) if isinstance(data, dict) else None
+
+    def _parse_plain_text(self, text: str) -> Plan | None:
+        """Last resort: a numbered list becomes steps; anything else is a direct answer."""
+        if not text:
+            console.print("[red]Planner returned an empty response.[/]")
+            return None
+        numbered = re.findall(r"^\s*\d+[.)]\s+(.+)$", text, flags=re.MULTILINE)
+        if len(numbered) >= 2:
+            return Plan(mode="execute", steps=[PlanStep(s.strip()) for s in numbered])
+        return Plan(mode="respond", response=text)
+
+    def _plan_from_dict(self, data: dict) -> Plan | None:
+        if not any(k in data for k in ("mode", "steps", "response")):
+            return None
+
+        valid = _valid_tool_names()
+        steps: list[PlanStep] = []
+        for raw in data.get("steps") or []:
+            if isinstance(raw, str):
+                desc, tools = raw, []
+            elif isinstance(raw, dict):
+                desc = str(raw.get("description") or raw.get("step") or "").strip()
+                tools = raw.get("tools") or raw.get("tool") or []
+                if isinstance(tools, str):
+                    tools = [tools]
+            else:
+                continue
+            if not desc.strip():
+                continue
+            # Drop unknown tool names; an empty list means "any tool" for that step.
+            steps.append(PlanStep(desc.strip(), [t for t in tools if t in valid]))
+
+        response = str(data.get("response") or "").strip()
+        mode = data.get("mode")
+        if mode not in ("execute", "respond"):
+            mode = "execute" if steps else "respond"
+        if mode == "execute" and not steps:
+            mode = "respond"
+        if mode == "respond" and not response:
+            if steps:
+                mode = "execute"
+            else:
+                return None
+        return Plan(mode=mode, steps=steps if mode == "execute" else [], response=response)

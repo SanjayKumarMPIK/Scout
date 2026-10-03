@@ -1,0 +1,4 @@
+Internet Speed Test Results:
+Ping: 153.299 ms
+Download: 9.30 Mbps
+Upload: 0.70 Mbps

@@ -4,3 +4,4 @@ psutil>=5.9
 pyautogui>=0.9
 pygetwindow>=0.0.9
 Pillow>=10.0
+keyring>=24.0

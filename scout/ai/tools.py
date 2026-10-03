@@ -64,6 +64,35 @@ def execute_tool(name: str, args: dict[str, Any]) -> StepResult:
 
 # -- Tool Implementations --
 
+def _resolve_app(name: str) -> str | None:
+    """Return the first working executable path for *name*, or None."""
+    import shutil
+    from scout.config import APP_ALIASES
+
+    name_lower = name.lower()
+    candidates = APP_ALIASES.get(name_lower)
+
+    # Substring match if exact match fails
+    if not candidates:
+        for alias, paths in APP_ALIASES.items():
+            if alias in name_lower or name_lower in alias:
+                candidates = paths
+                break
+
+    if not candidates:
+        candidates = [name]
+
+    for candidate in candidates:
+        # Try PATH lookup first
+        found = shutil.which(candidate)
+        if found:
+            return found
+    # Absolute paths that exist but aren't on PATH
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return None
+
 @register_tool(
     name="open_application",
     description="Open an application on Windows (e.g. notepad, chrome, vscode).",
@@ -83,15 +112,16 @@ def tool_open_application(app: str) -> StepResult:
     # Maybe it's already open?
     win = find_window(app)
     if not win:
-        from scout.commands.apps import _resolve_app
         import subprocess
         exe = _resolve_app(app)
-        if not exe:
-            return StepResult(False, f"Could not find application: {app}")
         try:
-            subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+            if exe:
+                subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+            else:
+                # Fall back to the Windows shell (resolves App Paths like 'winword', 'spotify').
+                os.startfile(app)  # type: ignore[attr-defined]
         except OSError as exc:
-            return StepResult(False, f"Failed to open {app}: {exc}")
+            return StepResult(False, f"Could not find or open application '{app}': {exc}")
         
         # Wait for window to appear
         for _ in range(10):

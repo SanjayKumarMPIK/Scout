@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Confirm
 
 from scout.ai.provider import AIProvider
@@ -52,6 +54,70 @@ Your objective is to fulfill the user's request.
 16. UNIFIED COMPUTER CONTROL: Use the single `computer` tool for all desktop UI actions (screenshot, click, double_click, move, drag, type, key, hotkey, scroll, activate_window). When combining this with vision, use: `computer({action: "screenshot"})` -> Vision provider -> `computer({action: "click", x: ..., y: ...})`.
 """
 
+# Appended to SYSTEM_PROMPT when the executor runs a planner-generated plan.
+EXECUTOR_PROMPT = SYSTEM_PROMPT + """
+# PLAN EXECUTION MODE (overrides rules 4-6 and 11)
+You are the EXECUTOR. A planner has already decided what to do. You receive the plan ONE STEP AT A TIME.
+- Execute ONLY the current step, exactly as written. Do not skip it, merge it with other steps, reorder, or add extra actions.
+- Use ONLY the tools offered for the current step.
+- When the step is finished, call `step_done` with a short factual result (include any values/output the user will need).
+- If the step cannot be completed after a reasonable corrective attempt, call `step_failed` with the reason. Never fake success.
+- Never call `step_done`/`step_failed` in the same response as other tools - observe the results first.
+- Do not write prose while executing steps; only make tool calls.
+"""
+
+# Control tools offered only while executing a plan step.
+_STEP_CONTROL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "step_done",
+            "description": "Report that the CURRENT plan step is complete.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string", "description": "Short factual result of this step, including any data obtained."}
+                },
+                "required": ["result"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "step_failed",
+            "description": "Report that the CURRENT plan step cannot be completed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why the step failed."}
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+]
+_CONTROL_NAMES = {"step_done", "step_failed", "complete_task"}
+
+
+@dataclass
+class StepOutcome:
+    status: str  # "done" | "failed" | "cancelled"
+    result: str
+
+
+class _Cancelled(Exception):
+    """Raised when the user declines a tool confirmation."""
+
+
+def _print_response(text: str) -> None:
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    console.print("\n[bold cyan]Scout[/]")
+    console.print(Panel(Markdown(text), border_style="cyan"))
+
+
 class AIInterpreter:
     def __init__(self, provider: AIProvider, system_prompt: str = SYSTEM_PROMPT):
         self.provider = provider
@@ -78,124 +144,143 @@ class AIInterpreter:
         self._inject_memory(request)
         self._run_loop()
 
+    # ── Shared helpers ─────────────────────────────────────────────────
+
+    def _completion(self, tools: list[dict], status: str = "[bold cyan]AI is thinking...[/]") -> dict:
+        """Call the provider and append the (sanitized) assistant message to history."""
+        with console.status(status):
+            response = self.provider.chat_completion(self.system_prompt, self.messages, tools=tools)
+
+        choice = response.get("choices", [{}])[0].get("message", {})
+        if not choice:
+            choice = {"role": "assistant"}
+        elif "role" not in choice:
+            choice["role"] = "assistant"
+
+        # Sanitize content: OpenRouter/Nvidia complains if content is null
+        if choice.get("content") is None:
+            choice["content"] = ""
+
+        self.messages.append(choice)
+        return choice
+
+    def _add_tool_result(self, tool_call: dict, content: str) -> None:
+        self.messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.get("id", "0"),
+            "name": tool_call["function"]["name"],
+            "content": content,
+        })
+
+    def _close_pending(self, tool_calls: list[dict], content: str) -> None:
+        """Give every unanswered tool call a result so the API history stays valid."""
+        answered = {m.get("tool_call_id") for m in self.messages if m.get("role") == "tool"}
+        for tc in tool_calls:
+            if tc.get("id", "0") not in answered:
+                self._add_tool_result(tc, content)
+
+    @staticmethod
+    def _parse_args(tool_call: dict) -> tuple[dict, str]:
+        args_str = tool_call["function"].get("arguments", "")
+        if isinstance(args_str, dict):
+            return args_str, json.dumps(args_str)
+        try:
+            return json.loads(args_str or "{}"), args_str
+        except json.JSONDecodeError:
+            return {}, args_str
+
+    def _run_tool(self, tool_call: dict) -> None:
+        """Display, safety-check, execute one tool call and record its result.
+
+        Raises _Cancelled if the user declines a confirmation.
+        """
+        from rich.panel import Panel
+
+        func_name = tool_call["function"]["name"]
+        args, args_str = self._parse_args(tool_call)
+
+        console.print(Panel(f"[dim]{escape(args_str)}[/dim]", title=f"[bold yellow]⚙ {func_name}[/]", title_align="left", border_style="yellow", padding=(0, 1)))
+
+        # Check safety
+        risk = _get_risk_level(func_name)
+
+        # Check command safety
+        if func_name == "run_command":
+            from scout.core.safety import is_destructive
+            if is_destructive(args.get("command", "")):
+                risk = "HIGH_RISK"
+
+        proceed = True
+        if risk == "HIGH_RISK":
+            proceed = Confirm.ask(f"[bold red]Allow HIGH RISK action '{func_name}'?[/]", default=False)
+        elif risk == "CONFIRM":
+            proceed = Confirm.ask(f"[yellow]Allow action '{func_name}'?[/]", default=True)
+
+        if not proceed:
+            raise _Cancelled()
+
+        # Execute
+        result = execute_tool(func_name, args)
+        if result.success:
+            console.print(f"[green][RESULT] success:[/green] {escape(result.message)}")
+        else:
+            console.print(f"[red][RESULT] failed:[/red] {escape(result.message)}")
+
+        self._add_tool_result(tool_call, result.message if result.success else f"ERROR: {result.message}")
+
+    # ── Free-form agent loop (single-model mode) ───────────────────────
+
     def _run_loop(self) -> None:
         max_iterations = 15
-        invalid_response_retries = 0
         tools = get_tools()
 
         console.print("[dim]Scout: AI agent online.[/dim]")
 
         try:
             for _ in range(max_iterations):
-                with console.status("[bold cyan]AI is thinking...[/]"):
-                    try:
-                        response = self.provider.chat_completion(self.system_prompt, self.messages, tools=tools)
-                    except Exception as e:
-                        console.print(f"[red]Error communicating with AI:[/] {e}")
-                        return
+                try:
+                    choice = self._completion(tools)
+                except Exception as e:
+                    console.print(f"[red]Error communicating with AI:[/] {escape(str(e))}")
+                    return
 
-                choice = response.get("choices", [{}])[0].get("message", {})
-                
-                if not choice:
-                    choice = {"role": "assistant"}
-                elif "role" not in choice:
-                    choice["role"] = "assistant"
+                content = (choice.get("content") or "").strip()
+                tool_calls = choice.get("tool_calls") or []
 
-                # Sanitize content: OpenRouter/Nvidia complains if content is null
-                if choice.get("content") is None:
-                    choice["content"] = ""
-                    
-                self.messages.append(choice)
+                if content:
+                    _print_response(content)
+                    if not tool_calls:
+                        return  # End of turn
 
-                if choice.get("content"):
-                    content = choice["content"].strip()
-                    if content:
-                        from rich.markdown import Markdown
-                        from rich.panel import Panel
-                        console.print("\n[bold cyan]Scout[/]")
-                        console.print(Panel(Markdown(content), border_style="cyan"))
-                        if not choice.get("tool_calls"):
-                            return  # End of turn
-
-                tool_calls = choice.get("tool_calls", [])
                 if not tool_calls:
                     # No tools called and no content? Break.
                     break
 
                 # Filter out premature complete_task calls if accompanied by other tools
                 if any(tc["function"]["name"] == "complete_task" for tc in tool_calls) and len(tool_calls) > 1:
+                    for tc in tool_calls:
+                        if tc["function"]["name"] == "complete_task":
+                            self._add_tool_result(tc, "Ignored: observe the results of your other actions first.")
                     tool_calls = [tc for tc in tool_calls if tc["function"]["name"] != "complete_task"]
                     console.print("\n[dim]Intercepted premature complete_task. Forcing observation of results...[/dim]")
 
                 # Handle tool calls
-                for i, tool_call in enumerate(tool_calls):
-                    func_name = tool_call["function"]["name"]
-                    args_str = tool_call["function"]["arguments"]
-                    try:
-                        args = json.loads(args_str)
-                    except json.JSONDecodeError:
-                        args = {}
-
-                    from rich.panel import Panel
-                    console.print(Panel(f"[dim]{args_str}[/dim]", title=f"[bold yellow]⚙ {func_name}[/]", title_align="left", border_style="yellow", padding=(0, 1)))
-
-                    if func_name == "complete_task":
+                for tool_call in tool_calls:
+                    if tool_call["function"]["name"] == "complete_task":
                         # Special exit tool
-                        msg = args.get("response", "Task completed.")
-                        from rich.markdown import Markdown
-                        from rich.panel import Panel
-                        console.print("\n[bold cyan]Scout[/]")
-                        console.print(Panel(Markdown(msg), border_style="cyan"))
+                        args, _ = self._parse_args(tool_call)
+                        _print_response(args.get("response", "Task completed."))
                         # Add result back to messages to satisfy API expectations
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id", "0"),
-                            "name": func_name,
-                            "content": "Task completed successfully."
-                        })
+                        self._add_tool_result(tool_call, "Task completed successfully.")
                         return
 
-                    # Check safety
-                    risk = _get_risk_level(func_name)
-                    proceed = True
-                    
-                    # Check command safety
-                    if func_name == "run_command":
-                        cmd = args.get("command", "")
-                        from scout.core.safety import is_destructive
-                        if is_destructive(cmd):
-                            risk = "HIGH_RISK"
-
-                    if risk == "HIGH_RISK":
-                        proceed = Confirm.ask(f"[bold red]Allow HIGH RISK action '{func_name}'?[/]", default=False)
-                    elif risk == "CONFIRM":
-                        proceed = Confirm.ask(f"[yellow]Allow action '{func_name}'?[/]", default=True)
-
-                    if not proceed:
+                    try:
+                        self._run_tool(tool_call)
+                    except _Cancelled:
                         console.print("\n[yellow]AI action cancelled by user.[/yellow]")
                         # Cleanup the rest of the pending tool calls
-                        for pending_tc in tool_calls[i:]:
-                            self.messages.append({
-                                "role": "tool",
-                                "tool_call_id": pending_tc.get("id", "0"),
-                                "name": pending_tc["function"]["name"],
-                                "content": "ERROR: Action cancelled by user."
-                            })
+                        self._close_pending(tool_calls, "ERROR: Action cancelled by user.")
                         return
-
-                    # Execute
-                    result = execute_tool(func_name, args)
-                    if result.success:
-                        console.print(f"[green][RESULT] success:[/green] {result.message}")
-                    else:
-                        console.print(f"[red][RESULT] failed:[/red] {result.message}")
-
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id", "0"),
-                        "name": func_name,
-                        "content": result.message if result.success else f"ERROR: {result.message}"
-                    })
 
             else:
                 console.print("[red]Agent reached maximum iterations without completing the task.[/red]")
@@ -204,13 +289,124 @@ class AIInterpreter:
             console.print("\n[yellow]AI action cancelled by user.[/yellow]")
             # Cleanup dangling tool calls to keep API history valid
             if self.messages and self.messages[-1].get("tool_calls"):
-                for tc in self.messages[-1]["tool_calls"]:
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", "0"),
-                        "name": tc["function"]["name"],
-                        "content": "ERROR: Execution interrupted by user."
-                    })
+                self._close_pending(self.messages[-1]["tool_calls"], "ERROR: Execution interrupted by user.")
             return
 
+    # ── Plan execution (planner/executor mode) ─────────────────────────
 
+    def begin_task(self, request: str, total_steps: int) -> None:
+        """Record the user's request before executing a plan step by step."""
+        self._inject_memory(request)
+        self.messages[-1]["content"] += (
+            f"\n\n(A planner produced a {total_steps}-step plan for this request. "
+            "You will receive the steps one at a time.)"
+        )
+
+    def run_step(self, number: int, total: int, description: str, allowed: list[str], max_iterations: int = 8) -> StepOutcome:
+        """Execute exactly one plan step, restricted to the tools the planner assigned."""
+        all_tools = [t for t in get_tools() if t["function"]["name"] != "complete_task"]
+        if allowed:
+            step_tools = [t for t in all_tools if t["function"]["name"] in allowed]
+        else:
+            step_tools = all_tools
+        allowed_names = {t["function"]["name"] for t in step_tools}
+        tools = step_tools + _STEP_CONTROL_TOOLS
+
+        names_text = ", ".join(sorted(allowed_names))
+        self.messages.append({
+            "role": "user",
+            "content": (
+                f"PLAN STEP {number}/{total}: {description}\n\n"
+                f"Allowed tools for this step: {names_text}.\n"
+                "Execute exactly this step - nothing from other steps, nothing extra. "
+                "When it is finished call `step_done` with the result; if it cannot be done call `step_failed`."
+            ),
+        })
+
+        nudged = False
+        try:
+            for _ in range(max_iterations):
+                try:
+                    choice = self._completion(tools, status=f"[bold cyan]Executing step {number}/{total}...[/]")
+                except Exception as e:
+                    return StepOutcome("failed", f"AI error: {e}")
+
+                tool_calls = choice.get("tool_calls") or []
+                content = (choice.get("content") or "").strip()
+
+                if not tool_calls:
+                    if not nudged:
+                        nudged = True
+                        self.messages.append({
+                            "role": "user",
+                            "content": "Respond only with tool calls: perform the step, or call `step_done` / `step_failed`.",
+                        })
+                        continue
+                    # Model insists on prose - treat it as the step's result.
+                    return StepOutcome("done", content or "No result reported.")
+
+                control = [tc for tc in tool_calls if tc["function"]["name"] in _CONTROL_NAMES]
+                actions = [tc for tc in tool_calls if tc["function"]["name"] not in _CONTROL_NAMES]
+
+                for tc in actions:
+                    name = tc["function"]["name"]
+                    if name not in allowed_names:
+                        console.print(f"[dim]Blocked '{name}': not part of step {number}.[/dim]")
+                        self._add_tool_result(tc, f"ERROR: '{name}' is not allowed for this step. Allowed tools: {names_text}.")
+                        continue
+                    self._run_tool(tc)
+
+                if control:
+                    if actions:
+                        # Premature: must observe the action results first.
+                        for tc in control:
+                            self._add_tool_result(tc, "Ignored: observe the results of your actions before reporting.")
+                        continue
+                    tc = control[0]
+                    for extra in control[1:]:
+                        self._add_tool_result(extra, "Ignored.")
+                    args, _ = self._parse_args(tc)
+                    name = tc["function"]["name"]
+                    if name == "step_failed":
+                        reason = str(args.get("reason") or "No reason given.")
+                        self._add_tool_result(tc, "Step marked as failed.")
+                        return StepOutcome("failed", reason)
+                    result = str(args.get("result") or args.get("response") or "Done.")
+                    self._add_tool_result(tc, "Step marked as done.")
+                    return StepOutcome("done", result)
+
+            return StepOutcome("failed", f"Step did not finish within {max_iterations} attempts.")
+
+        except _Cancelled:
+            self._close_pending(self.messages[-1].get("tool_calls") or [], "ERROR: Action cancelled by user.")
+            return StepOutcome("cancelled", "Cancelled by user.")
+        except KeyboardInterrupt:
+            last = next((m for m in reversed(self.messages) if m.get("role") == "assistant"), {})
+            self._close_pending(last.get("tool_calls") or [], "ERROR: Execution interrupted by user.")
+            return StepOutcome("cancelled", "Interrupted by user.")
+
+    def finalize(self, request: str, report: str) -> None:
+        """Write the final answer from the step results. No further actions are allowed."""
+        complete_tool = [t for t in get_tools() if t["function"]["name"] == "complete_task"]
+        self.messages.append({
+            "role": "user",
+            "content": (
+                f"The plan has finished. Step results:\n{report}\n\n"
+                f"Now call `complete_task` with the final response to the original request: \"{request}\". "
+                "Base it ONLY on the step results above; clearly state anything that failed. Do not perform new actions."
+            ),
+        })
+        try:
+            choice = self._completion(complete_tool, status="[bold cyan]Summarizing...[/]")
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]Error communicating with AI:[/] {escape(str(e))}")
+            _print_response(report)
+            return
+
+        text = (choice.get("content") or "").strip()
+        for tc in choice.get("tool_calls") or []:
+            if tc["function"]["name"] == "complete_task" and not text:
+                args, _ = self._parse_args(tc)
+                text = str(args.get("response") or "").strip()
+            self._add_tool_result(tc, "Task completed successfully.")
+        _print_response(text or report)

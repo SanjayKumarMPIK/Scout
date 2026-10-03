@@ -2,15 +2,37 @@
 
 **Personal Windows Automation Assistant** — a lightweight, terminal-first automation system.
 
-## Quick start
+## Install (Windows)
+
+1. Download `ScoutSetup-<version>.exe` and run it (no admin rights needed).
+2. Open a new terminal and type `scout` (or use the Start Menu shortcut).
+3. On first launch, pick your AI provider and enter **your own** API key.
+
+Everything personal stays on your machine and is never bundled in the installer:
+
+| Data | Location |
+| --- | --- |
+| API keys | Windows Credential Manager |
+| Memories | `%USERPROFILE%\.scout\data\scout.db` |
+| Settings | `%USERPROFILE%\.scout\config.json` |
+
+Uninstalling asks whether to also delete your memories/settings.
+
+## Run from source
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Run Scout
 python -m scout.cli
 ```
+
+## Build the installer
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
+
+Output: `dist\installer\ScoutSetup-<version>.exe`. The script installs PyInstaller and
+(via winget) Inno Setup if missing. Bump `__version__` in `scout/__init__.py` per release.
 
 ## Available commands
 

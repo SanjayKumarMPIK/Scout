@@ -37,30 +37,18 @@ def _ask_cmd(args: list[str]) -> None:
     if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
         from scout.ai import get_provider
         from scout.ai.planner import Planner
-        from scout.ai.interpreter import AIInterpreter, SYSTEM_PROMPT
+        from scout.ai.interpreter import AIInterpreter, EXECUTOR_PROMPT
+        from scout.ai.orchestrator import run_planned_turn
         
         console.print("[bold cyan]Dual Architecture Mode Active[/]")
         planner_prov = get_provider({"ai": config["planner"]})
         planner = Planner(planner_prov)
         
         exec_prov = get_provider({"ai": config["executor"]})
-        executor_prompt = SYSTEM_PROMPT + "\n\n17. STRICT EXECUTION: You are an executor. You MUST follow the exact plan provided in your instructions. Execute the steps precisely. Do not deviate."
-        executor = AIInterpreter(exec_prov, system_prompt=executor_prompt)
-        
-        plan = planner.generate_plan(request)
-        if not plan:
-            console.print("[red]Planner failed to generate a plan. Aborting.[/]")
-            return
-            
-        plan_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
-        from rich.panel import Panel
-        from rich.markdown import Markdown
-        console.print(Panel(Markdown(plan_md), title="[dim magenta]⚙ Execution Plan[/]", title_align="left", border_style="dim magenta", padding=(0, 2), style="dim"))
-            
-        plan_str = f"USER REQUEST: {request}\n\nEXECUTOR PLAN TO FOLLOW:\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
+        executor = AIInterpreter(exec_prov, system_prompt=EXECUTOR_PROMPT)
         
         try:
-            executor.ask(plan_str)
+            run_planned_turn(executor, planner, request)
         except Exception as e:
             from rich.markup import escape
             console.print(f"[red]Execution Error:[/] {escape(str(e))}")
@@ -102,76 +90,17 @@ def _handle_slash_command(cmd_line: str) -> bool:
             _interpreter.messages = []
         console.print("\n[dim]New chat started.[/dim]")
 
-    elif cmd == "/model":
-        if not args:
-            if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
-                p_prov = config["planner"].get("provider", "Not set")
-                p_mod = config["planner"].get("model", "Not set")
-                e_prov = config["executor"].get("provider", "Not set")
-                e_mod = config["executor"].get("model", "Not set")
-                console.print("\n[bold cyan]Dual Architecture Active[/]")
-                console.print(f"Planner:  {p_prov} / {p_mod}")
-                console.print(f"Executor: {e_prov} / {e_mod}\n")
-            else:
-                provider = config["ai"].get("provider", "Not set")
-                model = config["ai"].get("model", "Not set")
-                console.print(f"\nCurrent Monolithic Model:\nProvider: {provider}\nModel: {model}\n")
-        else:
-            if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
-                console.print("[yellow]Dual architecture is active. Use '/planner set <p> <m>' or '/executor set <p> <m>' instead of '/model'.[/yellow]")
-            else:
-                model_name = args[0]
-                config["ai"]["model"] = model_name
-                save_config(config)
-                if _interpreter:
-                    _interpreter.provider.model = model_name
-                console.print(f"\n[dim]Model changed to: {model_name}[/dim]")
-
     elif cmd == "/provider":
+        from scout.core.auth import get_api_key
         if not args:
-            provider = config["ai"].get("provider", "Not set")
-            console.print(f"\n[bold]Current Provider:[/] {provider}")
-            console.print("Available: ollama, groq, openai, gemini, anthropic, openrouter, custom\n")
-            return False
+            console.print("\n[bold]Current AI Configuration:[/]")
+            p_prov = config.get("planner", {}).get("provider", "Not set")
+            p_mod = config.get("planner", {}).get("model", "Not set")
+            e_prov = config.get("executor", {}).get("provider", "Not set")
+            e_mod = config.get("executor", {}).get("model", "Not set")
+            console.print(f"  [cyan]Planner:[/]  {p_prov} / {p_mod}")
+            console.print(f"  [cyan]Executor:[/] {e_prov} / {e_mod}")
             
-        sub = args[0].lower()
-        if sub == "set" and len(args) > 1:
-            prov = args[1].lower()
-            if prov not in ["ollama", "groq", "openai", "gemini", "anthropic", "openrouter", "custom"]:
-                console.print(f"\n[red]Unknown provider:[/] {prov}")
-                return False
-                
-            config["ai"]["provider"] = prov
-            save_config(config)
-            console.print(f"\n[dim]Provider set to {prov}. Use '/model <model_name>' to update the model.[/dim]")
-            
-            if _interpreter:
-                from scout.ai import get_provider
-                try:
-                    _interpreter.provider = get_provider(config)
-                    console.print(f"[dim]Interpreter re-initialized with {prov}.[/dim]")
-                except Exception as e:
-                    console.print(f"[red]Failed to initialize {prov}:[/] {e}")
-
-        elif sub == "key":
-            prov = config["ai"].get("provider", "groq")
-            if prov == "ollama":
-                console.print("\n[yellow]Ollama does not require an API key.[/yellow]")
-                return False
-            # Allow: /provider key sk-xxxxxxx  (direct paste)
-            if len(args) > 1:
-                key = " ".join(args[1:]).strip()
-            else:
-                key = prompt_secret(f"\nEnter API key for {prov}: ")
-            if not key:
-                console.print("[yellow]No key entered. Cancelled.[/yellow]")
-                return False
-            set_api_key(prov, key)
-            masked = key[-4:].rjust(len(key), "*") if len(key) > 4 else "****"
-            console.print(f"[dim]API key for {prov} securely stored ({masked}).[/dim]")
-            
-        elif sub == "keys":
-            from scout.core.auth import get_api_key
             console.print("\n[bold]Stored API Keys:[/]")
             found = False
             for p in ["openai", "groq", "gemini", "anthropic", "openrouter", "custom", "vision"]:
@@ -180,7 +109,35 @@ def _handle_slash_command(cmd_line: str) -> bool:
                     found = True
             if not found:
                 console.print("  [dim]No API keys currently stored.[/dim]")
-            console.print("\n[dim]Use '/provider remove <provider>' or '/provider remove all' to delete keys.[/dim]")
+            
+            console.print("\n[dim]To set an API key: /provider key <provider> [key][/dim]")
+            console.print("[dim]To remove a key: /provider remove <provider> | all[/dim]")
+            return False
+            
+        sub = args[0].lower()
+        if sub == "key":
+            if len(args) < 2:
+                console.print("\n[red]Usage:[/] /provider key <provider> [optional_key]")
+                console.print("Available providers: openai, groq, gemini, anthropic, openrouter, custom, vision")
+                return False
+                
+            prov = args[1].lower()
+            if prov == "ollama":
+                console.print("\n[yellow]Ollama does not require an API key.[/yellow]")
+                return False
+                
+            if len(args) > 2:
+                key = " ".join(args[2:]).strip()
+            else:
+                key = prompt_secret(f"\nEnter API key for {prov}: ")
+                
+            if not key:
+                console.print("[yellow]No key entered. Cancelled.[/yellow]")
+                return False
+                
+            set_api_key(prov, key)
+            masked = key[-4:].rjust(len(key), "*") if len(key) > 4 else "****"
+            console.print(f"[dim]API key for {prov} securely stored ({masked}).[/dim]")
             
         elif sub == "remove" and len(args) > 1:
             prov = args[1].lower()
@@ -197,22 +154,6 @@ def _handle_slash_command(cmd_line: str) -> bool:
                 console.print(f"\n[dim]Removed API key for {prov}.[/dim]")
             else:
                 console.print(f"\n[yellow]No stored key found for {prov}.[/yellow]")
-                
-        elif sub == "test":
-            if _interpreter:
-                success, msg = _interpreter.provider.test_connection()
-            else:
-                from scout.ai import get_provider
-                try:
-                    p = get_provider(config)
-                    success, msg = p.test_connection()
-                except Exception as e:
-                    success, msg = False, str(e)
-            
-            if success:
-                console.print(f"\n[green]Test passed:[/] {msg}")
-            else:
-                console.print(f"\n[red]Test failed:[/] {msg}")
                 
         else:
             console.print("\n[red]Unknown provider command.[/red]")
@@ -366,15 +307,9 @@ def _handle_slash_command(cmd_line: str) -> bool:
         console.print("/quit, /exit, /q     Exit Scout")
         console.print("/clear               Clear terminal")
         console.print("/new                 Start new chat")
-        console.print("/model               Show current provider & model")
-        console.print("/model <name>        Switch to a specific model")
-        console.print("/provider            Show current and available providers")
-        console.print("/provider set <prov> Select a provider")
-        console.print("/provider key        Enter API key (interactive prompt)")
-        console.print("/provider key <key>  Set API key directly (paste)")
-        console.print("/provider keys       List all stored API keys")
+        console.print("/provider            Show configuration and API keys")
+        console.print("/provider key <p>    Enter API key for a provider")
         console.print("/provider remove <p> Remove stored key (or use 'all')")
-        console.print("/provider test       Test provider connection")
         console.print("/planner set <p> <m> Set the high-level reasoning model")
         console.print("/executor set <p> <m> Set the low-level execution model")
         console.print("/memory              Show memory summary")
@@ -423,57 +358,23 @@ def _chat_cmd(args: list[str]) -> None:
             if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
                 from scout.ai import get_provider
                 from scout.ai.planner import Planner
-                from scout.ai.interpreter import AIInterpreter, SYSTEM_PROMPT
+                from scout.ai.interpreter import AIInterpreter, EXECUTOR_PROMPT
+                from scout.ai.orchestrator import run_planned_turn
                 
                 planner_prov = get_provider({"ai": config["planner"]})
                 planner = Planner(planner_prov)
                 
                 exec_prov = get_provider({"ai": config["executor"]})
-                executor_prompt = SYSTEM_PROMPT + "\n\n17. STRICT EXECUTION: You are an executor. You MUST follow the exact plan provided in your instructions. Execute the steps precisely. Do not deviate."
                 
                 # If we don't already have an executor, create one. Otherwise, reuse it to keep context.
                 if not getattr(interpreter, "is_executor", False):
-                    interpreter = AIInterpreter(exec_prov, system_prompt=executor_prompt)
+                    interpreter = AIInterpreter(exec_prov, system_prompt=EXECUTOR_PROMPT)
                     interpreter.is_executor = True
                 else:
                     interpreter.provider = exec_prov
                 
-                # Get a comprehensive recent execution log for the planner
-                mem_context = "Recent Execution Log (Context for planning):\n"
-                for msg in interpreter.messages[-20:]:
-                    role = msg.get("role")
-                    content = msg.get("content", "")
-                    if role == "user":
-                        # The user message usually contains "USER REQUEST: ... \n\n EXECUTOR PLAN..."
-                        # We just want to remind the planner of the raw user request if possible
-                        if "USER REQUEST:" in content:
-                            req_part = content.split("EXECUTOR PLAN TO FOLLOW:")[0].strip()
-                            mem_context += f"User: {req_part}\n"
-                        else:
-                            mem_context += f"User: {content}\n"
-                    elif role == "assistant":
-                        if content:
-                            mem_context += f"Executor (Spoke): {content}\n"
-                        if "tool_calls" in msg:
-                            for tc in msg["tool_calls"]:
-                                func = tc.get("function", {}).get("name", "")
-                                args = tc.get("function", {}).get("arguments", "")
-                                mem_context += f"Executor (Tool Call): {func}({args})\n"
-                    elif role == "tool":
-                        mem_context += f"System (Tool Result): {content[:300]}...\n"
-                
-                plan = planner.generate_plan(req, memory_context=mem_context)
-                if not plan:
-                    console.print("[red]Planner failed to generate a plan.[/]")
-                    continue
-                    
-                plan_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
-                from rich.panel import Panel
-                from rich.markdown import Markdown
-                console.print(Panel(Markdown(plan_md), title="[dim magenta]⚙ Execution Plan[/]", title_align="left", border_style="dim magenta", padding=(0, 2), style="dim"))
-                    
-                plan_str = f"USER REQUEST: {req}\n\nEXECUTOR PLAN TO FOLLOW:\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
-                interpreter.chat_turn(plan_str)
+                # Plan -> show plan -> execute each step exactly as shown.
+                run_planned_turn(interpreter, planner, req)
             else:
                 interpreter.chat_turn(req)
         except KeyboardInterrupt:

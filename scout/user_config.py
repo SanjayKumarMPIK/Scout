@@ -12,10 +12,7 @@ CONFIG_FILE = APP_DIR / "config.json"
 
 # Default config written on first run.
 _DEFAULT_CONFIG: dict = {
-    "projects": {
-        "native": r"C:\PROJECTS\Native\android",
-        "web": r"C:\PROJECTS\Web",
-    }
+    "projects": {}
 }
 
 

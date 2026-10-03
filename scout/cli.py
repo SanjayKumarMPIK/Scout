@@ -82,6 +82,14 @@ def _print_banner() -> None:
 
 def main() -> None:
     """Launch the interactive Scout shell."""
+    # Windows may default to cp1252 (e.g. redirected output, older consoles),
+    # which crashes on the Unicode glyphs used in the UI.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     _print_banner()
 
     if len(sys.argv) > 1:
