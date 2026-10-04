@@ -93,7 +93,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         total = number + len(queue)
 
         console.print(f"\n[bold magenta]▸ Step {number}/{total}[/] {escape(step.description)}")
-        outcome: StepOutcome = interpreter.run_step(number, total, step.description, step.tools)
+        outcome: StepOutcome = interpreter.run_step(number, total, step.description, step.tools, history=history)
         history.append((step, outcome.status, outcome.result))
 
         if outcome.status == "done":
@@ -119,7 +119,62 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         _show_plan(revised.steps, "Revised Plan", start=number + 1)
         queue = list(revised.steps)
 
+        if not queue and replans < MAX_REPLANS:
+            report = _report(history)
+            check_prompt = (
+                f"Original Request: {request}\n\n"
+                f"Execution History:\n{report}\n\n"
+                "Was the user's original request fully completed? If yes, use mode='respond' to finalize. "
+                "If no, or if new issues arose that need fixing, use mode='execute' and generate the remaining steps."
+            )
+            with console.status("[bold cyan]Checking if goal was met...[/]"):
+                check_plan = planner.generate_plan(check_prompt, memory_context=build_context(interpreter.messages))
+            if check_plan and check_plan.mode == "execute" and check_plan.steps:
+                console.print("[yellow]Planner determined goal is not fully met. Adding remaining steps...[/yellow]")
+                _show_plan(check_plan.steps, "Additional Steps (Goal Verification)", start=len(history) + 1)
+                queue = list(check_plan.steps)
+                replans += 1
+                continue
+        
+        break
+
     report = _report(history)
     if planner_note:
         report += f"\n\nPlanner note: {planner_note}"
+    
     interpreter.finalize(request, report)
+    
+    # Automatically learn facts into memory
+    with console.status("[bold cyan]Extracting memory...[/]"):
+        try:
+            from scout.memory.store import get_memory_store
+            mem_prompt = (
+                f"User Request: {request}\n"
+                f"Execution Result:\n{report}\n\n"
+                "Did the user state any facts, preferences, or personal details that should be remembered for future interactions? "
+                "Respond ONLY with a JSON array of objects in this format: "
+                '[{"key": "user_name", "value": "Alice"}, {"key": "likes_dark_mode", "value": "yes"}]. '
+                "Return an empty array [] if there is nothing to remember."
+            )
+            # Use planner's provider for memory extraction
+            mem_response = planner.provider.chat_completion(
+                "You are a memory extraction assistant. Output strictly JSON.",
+                [{"role": "user", "content": mem_prompt}],
+                []
+            )
+            mem_text = mem_response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            
+            # Find JSON array
+            import json
+            import re
+            match = re.search(r'\[.*\]', mem_text, re.DOTALL)
+            if match:
+                facts = json.loads(match.group(0))
+                if facts:
+                    store = get_memory_store()
+                    for fact in facts:
+                        store.save("preferences", fact["key"], fact["value"])
+                    console.print(f"[dim]Learned {len(facts)} new fact(s) into memory.[/dim]")
+        except Exception:
+            pass # Fail silently for memory extraction
+

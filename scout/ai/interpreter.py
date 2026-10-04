@@ -17,7 +17,7 @@ console = Console()
 
 # ── Risk levels ────────────────────────────────────────────────────────
 
-SAFE = {"computer", "list_windows", "get_active_window", "find_window", "minimize_window", "maximize_window", "list_files", "read_file", "system_info", "project_info", "git_status", "git_log", "git_branch", "open_application", "open_url", "project_open", "complete_task", "verify_screen"}
+SAFE = {"computer", "list_windows", "get_active_window", "find_window", "minimize_window", "maximize_window", "list_files", "read_file", "system_info", "project_info", "git_status", "git_log", "git_branch", "open_application", "open_url", "project_open", "complete_task", "verify_screen", "analyze_screen"}
 CONFIRM = {"close_window", "run_command", "project_run", "git_pull", "git_commit", "write_file", "create_directory", "change_directory"}
 HIGH_RISK = {"git_push"}
 
@@ -51,7 +51,8 @@ Your objective is to fulfill the user's request.
 13. WINDOWS ENVIRONMENT: You are running on Windows. When using `run_command`, you MUST use valid Windows command prompt or PowerShell syntax (e.g., use `move` instead of `mv`, `copy` instead of `cp`, `dir` instead of `ls`).
 14. SCREEN VERIFICATION: Do not verify trivial headless actions (like reading a file). Only use `verify_screen` for high-value visual changes (opening apps, navigating browsers, checking UI state after a click).
 15. DO NOT INSTRUCT THE USER: NEVER tell the user how to do something manually (e.g. "Please open Task Manager"). You are an automation agent. You must execute the necessary tools yourself to fulfill the request. If you don't know how to do it, say so, but do not give the user instructions to perform the task manually.
-16. UNIFIED COMPUTER CONTROL: Use the single `computer` tool for all desktop UI actions (screenshot, click, double_click, move, drag, type, key, hotkey, scroll, activate_window). When combining this with vision, use: `computer({action: "screenshot"})` -> Vision provider -> `computer({action: "click", x: ..., y: ...})`.
+16. UNIFIED COMPUTER CONTROL: Use the single `computer` tool for all desktop UI actions (screenshot, click, double_click, move, drag, type, key, hotkey, scroll, activate_window). When combining this with vision, use: `analyze_screen` to find coordinates or information, then use `computer({action: "click", x: ..., y: ...})` to interact.
+17. DANGEROUS ACTION PREVENTION: NEVER use destructive keyboard/mouse actions (like `Ctrl+A`, `Delete`, `Ctrl+C`) to "read", "check", or "test" the state of an application or document. To extract information visually, you MUST use `analyze_screen` or `verify_screen`.
 """
 
 # Appended to SYSTEM_PROMPT when the executor runs a planner-generated plan.
@@ -60,7 +61,7 @@ EXECUTOR_PROMPT = SYSTEM_PROMPT + """
 You are the EXECUTOR. A planner has already decided what to do. You receive the plan ONE STEP AT A TIME.
 - Execute ONLY the current step, exactly as written. Do not skip it, merge it with other steps, reorder, or add extra actions.
 - Use ONLY the tools offered for the current step.
-- When the step is finished, call `step_done` with a short factual result (include any values/output the user will need).
+- When the step is finished, call `step_done` with the FULL, detailed result of the step (include ALL exact data, observations, or text obtained so the planner can see them). Do not summarize away important details.
 - If the step cannot be completed after a reasonable corrective attempt, call `step_failed` with the reason. Never fake success.
 - Never call `step_done`/`step_failed` in the same response as other tools - observe the results first.
 - Do not write prose while executing steps; only make tool calls.
@@ -76,7 +77,7 @@ _STEP_CONTROL_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "result": {"type": "string", "description": "Short factual result of this step, including any data obtained."}
+                    "result": {"type": "string", "description": "The complete, detailed result of this step. Include all extracted data and full observations; do not summarize."}
                 },
                 "required": ["result"],
             },
@@ -210,6 +211,16 @@ class AIInterpreter:
             if is_destructive(args.get("command", "")):
                 risk = "HIGH_RISK"
 
+        # IMPORTANT: Before prompting the user (which steals focus to the terminal),
+        # capture the current active window (e.g. a Save As dialog that opened recently)
+        # and update the target manager, so we can restore focus to it after approval!
+        from scout.ai.window_manager import get_active_window, get_target_window_manager
+        active_win = get_active_window()
+        if active_win and active_win.get("handle"):
+            title = active_win.get("title", "")
+            if "Scout" not in title and "Windows PowerShell" not in title and "Command Prompt" not in title:
+                get_target_window_manager().set_target(active_win["handle"], title)
+
         proceed = True
         if risk == "HIGH_RISK":
             proceed = Confirm.ask(f"[bold red]Allow HIGH RISK action '{func_name}'?[/]", default=False)
@@ -302,8 +313,10 @@ class AIInterpreter:
             "You will receive the steps one at a time.)"
         )
 
-    def run_step(self, number: int, total: int, description: str, allowed: list[str], max_iterations: int = 8) -> StepOutcome:
+    def run_step(self, number: int, total: int, description: str, allowed: list[str], history: list[tuple[Any, str, str]] = None, max_iterations: int = 8) -> StepOutcome:
         """Execute exactly one plan step, restricted to the tools the planner assigned."""
+        from scout.ai.tools import get_tools
+        
         all_tools = [t for t in get_tools() if t["function"]["name"] != "complete_task"]
         if allowed:
             step_tools = [t for t in all_tools if t["function"]["name"] in allowed]
@@ -313,10 +326,19 @@ class AIInterpreter:
         tools = step_tools + _STEP_CONTROL_TOOLS
 
         names_text = ", ".join(sorted(allowed_names))
+        
+        history_text = ""
+        if history:
+            history_text = "Results of previous steps:\n"
+            for i, (h_step, h_status, h_result) in enumerate(history, 1):
+                history_text += f"{i}. [{h_status.upper()}] {h_step.description}\n   Result: {h_result}\n"
+            history_text += "\n"
+
         self.messages.append({
             "role": "user",
             "content": (
                 f"PLAN STEP {number}/{total}: {description}\n\n"
+                f"{history_text}"
                 f"Allowed tools for this step: {names_text}.\n"
                 "Execute exactly this step - nothing from other steps, nothing extra. "
                 "When it is finished call `step_done` with the result; if it cannot be done call `step_failed`."
@@ -392,7 +414,9 @@ class AIInterpreter:
             "role": "user",
             "content": (
                 f"The plan has finished. Step results:\n{report}\n\n"
-                f"Now call `complete_task` with the final response to the original request: \"{request}\". "
+                f"Now call `complete_task` with the final response to the original request: \"{request}\".\n"
+                "CRITICAL VERBOSITY RULE: If the request asks for an analysis, description, summary, or data extraction (e.g., 'What am I looking at?', 'Summarize this file', 'Find the errors'), your final response MUST be highly detailed and include all relevant information from the step results. Do not truncate or over-summarize.\n"
+                "If the request was just a simple action (e.g., 'Open notepad', 'Click the button'), keep the response short and concise.\n"
                 "Base it ONLY on the step results above; clearly state anything that failed. Do not perform new actions."
             ),
         })

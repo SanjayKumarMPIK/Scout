@@ -57,6 +57,13 @@ class ComputerController:
         if not act:
             return self._report(False, "No action specified.")
 
+        focus_dependent_actions = {"click", "double_click", "move", "drag", "type", "key", "hotkey", "scroll"}
+        if act in focus_dependent_actions:
+            from scout.ai.window_manager import get_target_window_manager
+            focus_res = get_target_window_manager().ensure_target_focus()
+            if not focus_res.get("success"):
+                return focus_res
+
         try:
             if act == "screenshot":
                 return self._screenshot()

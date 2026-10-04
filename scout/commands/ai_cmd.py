@@ -203,6 +203,23 @@ def _handle_slash_command(cmd_line: str) -> bool:
                     console.print("\n[bold cyan]Search Results:[/]")
                     for r in res:
                         console.print(f"  [{r['category']}] {r['key']}: {r['value']}")
+            elif sub == "list":
+                cat = args[1] if len(args) > 1 else None
+                conn = mem_store._get_conn()
+                if cat:
+                    rows = conn.execute("SELECT category, key, value FROM memories WHERE category = ? ORDER BY key", (cat,)).fetchall()
+                else:
+                    rows = conn.execute("SELECT category, key, value FROM memories ORDER BY category, key").fetchall()
+                if not rows:
+                    console.print(f"\n[yellow]No memories found{' for category ' + cat if cat else ''}.[/yellow]")
+                else:
+                    console.print(f"\n[bold cyan]Saved Memories ({len(rows)} total):[/]")
+                    current_cat = None
+                    for r in rows:
+                        if r['category'] != current_cat:
+                            current_cat = r['category']
+                            console.print(f"\n[bold]{current_cat}[/]")
+                        console.print(f"  [green]{r['key']}[/green]: {r['value']}")
             elif sub == "set" and len(args) > 2:
                 key = args[1]
                 val = " ".join(args[2:])
@@ -224,7 +241,7 @@ def _handle_slash_command(cmd_line: str) -> bool:
                     cnt = mem_store.clear_all()
                     console.print(f"[dim]Cleared {cnt} memories.[/dim]")
             else:
-                console.print("\n[red]Unknown memory command.[/red] Usage: /memory [search <q> | set <k> <v> | delete <k> | clear]")
+                console.print("\n[red]Unknown memory command.[/red] Usage: /memory [search <q> | list [cat] | set <k> <v> | delete <k> | clear]")
 
     elif cmd == "/vision":
         if not args:
@@ -313,6 +330,7 @@ def _handle_slash_command(cmd_line: str) -> bool:
         console.print("/planner set <p> <m> Set the high-level reasoning model")
         console.print("/executor set <p> <m> Set the low-level execution model")
         console.print("/memory              Show memory summary")
+        console.print("/memory list [cat]   List all saved memories or by category")
         console.print("/memory search <q>   Search memories")
         console.print("/memory set <k> <v>  Store a preference/fact")
         console.print("/memory delete <k>   Delete a memory")

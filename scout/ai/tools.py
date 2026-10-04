@@ -435,6 +435,38 @@ def tool_verify_screen(expected_state: str) -> StepResult:
         verified = "true" in raw.lower() and "false" not in raw.lower()
         return StepResult(True, f"Verified (guessed): {verified}\nRaw Observation: {raw}")
 
+@register_tool(
+    name="analyze_screen",
+    description="Capture the screen and ask the vision model a question or instruction about it (e.g., 'What am I looking at?', 'Find the coordinates of the login button').",
+    parameters={
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "The question or instruction for analyzing the screen."
+            }
+        },
+        "required": ["prompt"]
+    }
+)
+def tool_analyze_screen(prompt: str) -> StepResult:
+    from scout.vision.capture import take_screenshot
+    from scout.vision.core import get_vision_provider
+    
+    provider = get_vision_provider()
+    if not provider:
+        return StepResult(False, "Vision provider not configured or available.")
+        
+    cap = take_screenshot()
+    if not cap.get("success"):
+        return StepResult(False, f"Failed to capture screen: {cap.get('error')}")
+        
+    res = provider.analyze(cap["path"], prompt)
+    if not res.get("success"):
+        return StepResult(False, f"Vision analysis failed: {res.get('observation')}")
+        
+    return StepResult(True, res.get("observation", "No observation provided."))
+
 # -- Unified Computer Tool --
 
 @register_tool(

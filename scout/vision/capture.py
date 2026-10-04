@@ -36,11 +36,13 @@ def take_screenshot() -> dict:
         import pyautogui
         from scout.ai.window_manager import get_active_window
 
+        from PIL import ImageGrab
+
         timestamp = time.time()
         filename = f"capture_{int(timestamp)}.png"
         filepath = CAPTURE_DIR / filename
 
-        img = pyautogui.screenshot()
+        img = ImageGrab.grab(all_screens=True)
         img.save(str(filepath))
 
         active = get_active_window()
