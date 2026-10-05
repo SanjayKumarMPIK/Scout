@@ -11,15 +11,14 @@ from scout.config import APP_DIR
 
 DB_PATH = APP_DIR / "data" / "scout.db"
 
+import getpass
+
 # Initial user profile seeded on first run
 _INITIAL_PROFILE = {
-    "name": "Sanjay Kumar MP",
-    "occupation": "Engineering student",
-    "course": "Computer Science and Business Systems",
-    "interests": "AI, automation, web development, cybersecurity",
-    "current_project": "Scout",
-    "preferred_development_style": "terminal-first",
-    "preferred_ai": "local AI when practical",
+    "name": getpass.getuser(),
+    "occupation": "User",
+    "interests": "General automation",
+    "preferred_development_style": "Standard",
 }
 
 
