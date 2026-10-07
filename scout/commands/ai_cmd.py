@@ -13,6 +13,7 @@ console = Console()
 
 # Singleton interpreter to maintain chat memory across a `chat` session or consecutive `ask`s
 _interpreter: AIInterpreter | None = None
+_voice_mode: bool = False
 
 def _get_interpreter() -> AIInterpreter:
     global _interpreter
@@ -298,50 +299,84 @@ def _handle_slash_command(cmd_line: str) -> bool:
             else:
                 console.print("\n[red]Unknown vision command.[/red] Usage: /vision [set <prov> <model> | key | test]")
 
-    elif cmd == "/computer":
-        from scout.computer.controller import get_computer_controller
-        ctrl = get_computer_controller()
+    elif cmd == "/voice":
+        global _voice_mode
         if not args:
-            state = ctrl.get_state()
-            enabled_str = "[green]enabled[/green]" if state["enabled"] else "[red]disabled[/red]"
-            console.print(f"\n[bold]Computer Control:[/] {enabled_str}")
-            console.print(f"Active Window: {state['active_window']}")
-            console.print(f"Screen: {state['screen_width']}x{state['screen_height']}")
-            console.print(f"Mouse: ({state['mouse_position']['x']}, {state['mouse_position']['y']})")
+            _voice_mode = not _voice_mode
+            console.print(f"\n[dim]Voice mode {'enabled' if _voice_mode else 'disabled'} (STT & TTS).[/dim]")
+            if not _voice_mode:
+                try:
+                    from scout.voice.tts import stop_speaking
+                    stop_speaking()
+                except ImportError:
+                    pass
         else:
             sub = args[0].lower()
             if sub == "on":
-                ctrl.enabled = True
-                console.print("\n[dim]Computer control enabled.[/dim]")
+                _voice_mode = True
+                console.print("\n[dim]Voice mode enabled.[/dim]")
             elif sub == "off":
-                ctrl.enabled = False
-                console.print("\n[dim]Computer control disabled.[/dim]")
+                _voice_mode = False
+                try:
+                    from scout.voice.tts import stop_speaking
+                    stop_speaking()
+                except ImportError:
+                    pass
+                console.print("\n[dim]Voice mode disabled.[/dim]")
+            elif sub == "stt-provider" and len(args) > 1:
+                prov = args[1].lower()
+                if prov not in ("groq", "local"):
+                    console.print("\n[red]Invalid provider.[/red] Use: /voice stt-provider [groq|local]")
+                    return False
+                if "voice" not in config:
+                    config["voice"] = {}
+                config["voice"]["provider"] = prov
+                save_config(config)
+                console.print(f"\n[dim]STT provider set to: {prov}[/dim]")
+            elif sub == "tts-profile" and len(args) > 1:
+                if "tts" not in config:
+                    config["tts"] = {}
+                config["tts"]["voice"] = args[1]
+                save_config(config)
+                console.print(f"\n[dim]TTS voice profile set to: {args[1]}[/dim]")
+            elif sub == "tts-speed" and len(args) > 1:
+                if "tts" not in config:
+                    config["tts"] = {}
+                try:
+                    config["tts"]["speed"] = float(args[1])
+                    save_config(config)
+                    console.print(f"\n[dim]TTS speed set to: {args[1]}[/dim]")
+                except ValueError:
+                    console.print("\n[red]Invalid speed value. Must be a number.[/red]")
             else:
-                console.print("\n[red]Unknown computer command.[/red] Usage: /computer [on|off]")
+                console.print("\n[red]Unknown voice command.[/red] Usage: /voice [on|off | stt-provider <p> | tts-profile <name> | tts-speed <val>]")
+                return False
 
     elif cmd == "/help":
         console.print("\n[bold]Scout Commands[/]")
-        console.print("/quit, /exit, /q     Exit Scout")
-        console.print("/clear               Clear terminal")
-        console.print("/new                 Start new chat")
-        console.print("/provider            Show configuration and API keys")
-        console.print("/provider key <p>    Enter API key for a provider")
-        console.print("/provider remove <p> Remove stored key (or use 'all')")
-        console.print("/planner set <p> <m> Set the high-level reasoning model")
-        console.print("/executor set <p> <m> Set the low-level execution model")
-        console.print("/memory              Show memory summary")
-        console.print("/memory list [cat]   List all saved memories or by category")
-        console.print("/memory search <q>   Search memories")
-        console.print("/memory set <k> <v>  Store a preference/fact")
-        console.print("/memory delete <k>   Delete a memory")
-        console.print("/memory clear        Clear all memories")
-        console.print("/vision              Show vision status")
-        console.print("/vision set <p> <m>  Set vision provider & model")
-        console.print("/vision key          Set dedicated vision API key")
-        console.print("/vision test         Test vision capabilities")
-        console.print("/computer            Show computer control state")
-        console.print("/computer on|off     Enable or disable computer control")
-        console.print("/help                Show commands\n")
+        console.print("/quit, /exit, /q         Exit Scout")
+        console.print("/clear                   Clear terminal")
+        console.print("/new                     Start new chat")
+        console.print("/provider                Show configuration and API keys")
+        console.print("/provider key <p>        Enter API key for a provider")
+        console.print("/provider remove <p>     Remove stored key (or use 'all')")
+        console.print("/planner set <p> <m>     Set the high-level reasoning model")
+        console.print("/executor set <p> <m>    Set the low-level execution model")
+        console.print("/memory                  Show memory summary")
+        console.print("/memory list [cat]       List all saved memories or by category")
+        console.print("/memory search <q>       Search memories")
+        console.print("/memory set <k> <v>      Store a preference/fact")
+        console.print("/memory delete <k>       Delete a memory")
+        console.print("/memory clear            Clear all memories")
+        console.print("/vision                  Show vision status")
+        console.print("/vision set <p> <m>      Set vision provider & model")
+        console.print("/vision key              Set dedicated vision API key")
+        console.print("/vision test             Test vision capabilities")
+        console.print("/voice [on|off]          Toggle voice mode (STT & TTS)")
+        console.print("/voice stt-provider <p>  Set STT provider (groq | local)")
+        console.print("/voice tts-profile <n>   Set TTS voice profile (e.g. af_bella)")
+        console.print("/voice tts-speed <val>   Set TTS speech speed (e.g. 1.0)")
+        console.print("/help                    Show commands\n")
 
     else:
         console.print(f"\n[red]Unknown command:[/] {cmd}. Type /help for available commands.\n")
@@ -357,7 +392,29 @@ def _chat_cmd(args: list[str]) -> None:
     while True:
         try:
             from rich.prompt import Prompt
-            req = Prompt.ask("\n[bold green]❯ You[/]").strip()
+            global _voice_mode
+            
+            if _voice_mode:
+                req = Prompt.ask("\n[bold green]❯ You[/] [dim](Press Enter to talk, or type a command)[/dim]").strip()
+                try:
+                    from scout.voice.tts import stop_speaking
+                    stop_speaking()
+                except ImportError:
+                    pass
+                if not req:
+                    from scout.voice.stt import transcribe_audio
+                    req = transcribe_audio()
+                    if not req:
+                        continue
+                    console.print(f"\n[bold green]❯ You said:[/] {req}")
+            else:
+                req = Prompt.ask("\n[bold green]❯ You[/]").strip()
+                try:
+                    from scout.voice.tts import stop_speaking
+                    stop_speaking()
+                except ImportError:
+                    pass
+                
             if not req:
                 continue
                 
