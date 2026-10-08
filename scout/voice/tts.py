@@ -125,6 +125,7 @@ def _tts_worker():
         voice = tts_config.get("voice", "af_bella")
         speed = float(tts_config.get("speed", 1.0))
         
+        # Initialize local Kokoro
         if not _init_kokoro():
             _tts_queue.task_done()
             continue
@@ -142,33 +143,81 @@ def _tts_worker():
             except ImportError:
                 pass
             
-            # Split into manageable sentences
             sentences = re.split(r'(?<=[.!?\n])\s+', clean_text.strip())
+            sentences = [s.strip() for s in sentences if s.strip()]
             
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if not sentence or _stop_event.is_set():
-                    continue
-                    
-                # Generate audio
-                samples, sample_rate = _kokoro.create(sentence, voice=voice, speed=speed)
+            if not sentences or _stop_event.is_set():
+                _tts_queue.task_done()
+                continue
                 
-                if _stop_event.is_set():
-                    break
-                    
-                # Play audio
-                sd.play(samples, samplerate=sample_rate)
+            final_voice = voice
+            if '+' in voice or '*' in voice:
+                import numpy as np
+                parts = voice.split('+')
+                blended_style = None
                 
-                # Wait for playback to finish or be interrupted
+                for part in parts:
+                    part = part.strip()
+                    if not part: continue
+                    if '*' in part:
+                        v_name, v_weight = part.split('*')
+                        v_weight = float(v_weight.strip())
+                    else:
+                        v_name = part
+                        v_weight = 1.0
+                        
+                    v_name = v_name.strip()
+                    if v_name in _kokoro.voices:
+                        style = _kokoro.get_voice_style(v_name) * v_weight
+                        if blended_style is None: blended_style = style
+                        else: blended_style += style
+                    else:
+                        console.print(f"[yellow]Warning: Voice '{v_name}' not found for blending.[/yellow]")
+                
+                if blended_style is not None:
+                    final_voice = blended_style
+                    
+            import concurrent.futures
+            import sounddevice as sd
+            
+            def _generate_chunk(sentence):
+                return _kokoro.create(sentence, voice=final_voice, speed=speed)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_generate_chunk, sentences[0])
+                
                 try:
-                    stream = sd.get_stream()
-                    while stream and stream.active:
-                        if _stop_event.is_set():
-                            sd.stop()
-                            break
-                        time.sleep(0.05)
-                except Exception:
-                    pass
+                    samples, sr = future.result()
+                except Exception as e:
+                    console.print(f"\n[red]TTS Error:[/] {e}")
+                    _tts_queue.task_done()
+                    continue
+
+                if _stop_event.is_set():
+                    _tts_queue.task_done()
+                    continue
+
+                try:
+                    with sd.OutputStream(samplerate=sr, channels=1, dtype='float32') as audio_stream:
+                        for i in range(len(sentences)):
+                            if _stop_event.is_set():
+                                break
+                            
+                            next_future = None
+                            if i + 1 < len(sentences):
+                                next_future = executor.submit(_generate_chunk, sentences[i+1])
+                                
+                            # Play current sentence (blocks until finished)
+                            audio_stream.write(samples)
+                            
+                            if next_future:
+                                try:
+                                    samples, _ = next_future.result()
+                                except Exception as e:
+                                    console.print(f"\n[red]TTS Error:[/] {e}")
+                                    break
+                except Exception as e:
+                    console.print(f"\n[red]TTS Audio Stream Error:[/] {e}")
         except Exception as e:
             console.print(f"\n[yellow]TTS playback error: {e}[/yellow]")
             

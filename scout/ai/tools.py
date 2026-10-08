@@ -158,22 +158,61 @@ def tool_open_application(app: str) -> StepResult:
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "The shell command to run."},
-            "cwd": {"type": "string", "description": "Optional working directory."}
+            "cwd": {"type": "string", "description": "Optional working directory."},
+            "background": {"type": "boolean", "description": "Set to true for long-running servers/daemons (e.g. npm run dev, python -m http.server). Returns immediately after capturing initial output."}
         },
         "required": ["command"]
     }
 )
-def tool_run_command(command: str, cwd: str = "") -> StepResult:
+def tool_run_command(command: str, cwd: str = "", background: bool = False) -> StepResult:
     from scout.core.safety import is_blocked, is_destructive, confirm_destructive
     import subprocess
+    import time
+    import tempfile
+    import os
     
     if is_blocked(command):
         return StepResult(False, f"Blocked: {command}")
     if is_destructive(command) and not confirm_destructive(command):
         return StepResult(False, "Cancelled by user")
 
+    ps_cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
+    
+    if background:
+        try:
+            fd, temp_path = tempfile.mkstemp(suffix=".txt", text=True)
+            os.close(fd)
+            
+            with open(temp_path, "w") as out_f:
+                p = subprocess.Popen(
+                    ps_cmd, 
+                    stdout=out_f, 
+                    stderr=subprocess.STDOUT, 
+                    stdin=subprocess.DEVNULL,
+                    cwd=cwd or None, 
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            
+            # Wait a short moment to capture startup logs
+            time.sleep(3)
+            
+            ret = p.poll()
+            with open(temp_path, "r", encoding="utf-8", errors="replace") as in_f:
+                out = in_f.read()
+                
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+                
+            if ret is not None and ret != 0:
+                return StepResult(False, f"Background command exited early with code {ret}\nOutput:\n{out}")
+                
+            return StepResult(True, f"Started in background (PID {p.pid}).\nInitial Output:\n{out.strip()}")
+        except Exception as exc:
+            return StepResult(False, f"Failed to start background command: {exc}")
+
     try:
-        ps_cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
         result = subprocess.run(ps_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=cwd or None)
         out = ""
         if result.stdout:
@@ -185,7 +224,7 @@ def tool_run_command(command: str, cwd: str = "") -> StepResult:
             return StepResult(False, f"Exited with code {result.returncode}\n{out}")
         return StepResult(True, f"Command completed (exit 0)\n{out}")
     except subprocess.TimeoutExpired:
-        return StepResult(False, "Command timed out (120 s)")
+        return StepResult(False, "Command timed out (120 s). If this is a server, set background=true.")
     except Exception as exc:
         return StepResult(False, str(exc))
 
