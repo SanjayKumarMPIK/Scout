@@ -142,6 +142,9 @@ def _tts_worker():
                 clean_text = emoji.replace_emoji(clean_text, replace='')
             except ImportError:
                 pass
+                
+            # Fix common phonemizer struggles
+            clean_text = re.sub(r"\bI'm\b", "I am", clean_text, flags=re.IGNORECASE)
             
             sentences = re.split(r'(?<=[.!?\n])\s+', clean_text.strip())
             sentences = [s.strip() for s in sentences if s.strip()]

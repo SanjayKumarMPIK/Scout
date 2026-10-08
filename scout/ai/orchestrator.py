@@ -46,17 +46,12 @@ def build_context(messages: list[dict], limit: int = 30) -> str:
 
 def _show_plan(steps: list[PlanStep], title: str, start: int = 1) -> None:
     rows = []
-    for i, step in enumerate(steps, start):
-        tools = f"  `{', '.join(step.tools)}`" if step.tools else ""
-        rows.append(f"{i}. {step.description}{tools}")
-    console.print(Panel(
-        Markdown("\n".join(rows)),
-        title=f"[magenta]⚙ {title}[/]",
-        title_align="left",
-        border_style="magenta",
-        padding=(0, 2),
-    ))
-
+    for step in steps:
+        tools = f" (`{', '.join(step.tools)}`)" if step.tools else ""
+        rows.append(f"{step.description}{tools}")
+    
+    from scout.ui.chat import print_plan_overview
+    print_plan_overview(rows, title)
 
 def _report(history: list[tuple[PlanStep, str, str]]) -> str:
     return "\n".join(
@@ -92,12 +87,16 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         number = len(history) + 1
         total = number + len(queue)
 
-        console.print(f"\n[bold magenta]▸ Step {number}/{total}[/] {escape(step.description)}")
+        from scout.ui.theme import scout_theme
+        c = Console(theme=scout_theme)
+        c.print(f"\n[bold primary]⬡ Step {number}/{total}[/] [text]{escape(step.description)}[/]")
+        
         outcome: StepOutcome = interpreter.run_step(number, total, step.description, step.tools, history=history)
         history.append((step, outcome.status, outcome.result))
 
         if outcome.status == "done":
-            console.print(f"[green]✓ Step {number} done:[/] [dim]{escape(outcome.result)}[/dim]")
+            from scout.ui.chat import print_scout_status
+            print_scout_status(f"Step {number} done", "success")
             continue
 
         if outcome.status == "cancelled":

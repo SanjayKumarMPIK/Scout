@@ -33,6 +33,8 @@ def _ask_cmd(args: list[str]) -> None:
         return
     
     request = " ".join(args)
+    from scout.ui.chat import print_user_message
+    print_user_message(request)
     config = load_config()
     
     if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
@@ -41,7 +43,8 @@ def _ask_cmd(args: list[str]) -> None:
         from scout.ai.interpreter import AIInterpreter, EXECUTOR_PROMPT
         from scout.ai.orchestrator import run_planned_turn
         
-        console.print("[bold cyan]Dual Architecture Mode Active[/]")
+        from scout.ui.chat import print_scout_status
+        print_scout_status("Dual Architecture Mode Active", "listening")
         planner_prov = get_provider({"ai": config["planner"]})
         planner = Planner(planner_prov)
         
@@ -84,6 +87,8 @@ def _handle_slash_command(cmd_line: str) -> bool:
 
     elif cmd == "/clear":
         os.system("cls" if os.name == "nt" else "clear")
+        from scout.ui.header import print_persistent_header
+        print_persistent_header(config.get("ai", {}).get("model", "unknown"))
     
     elif cmd == "/new":
         global _interpreter
@@ -386,16 +391,18 @@ def _handle_slash_command(cmd_line: str) -> bool:
 
 def _chat_cmd(args: list[str]) -> None:
     """Interactive conversational session with the AI."""
-    console.print("[bold cyan]SCOUT AI Chat[/] (type 'exit' or 'quit' to end)")
+    from scout.ui.header import print_persistent_header
+    from scout.ui.chat import prompt_user
+    config = load_config()
+    print_persistent_header()
     interpreter = _get_interpreter()
     
     while True:
         try:
-            from rich.prompt import Prompt
             global _voice_mode
             
             if _voice_mode:
-                req = Prompt.ask("\n[bold green]❯ You[/] [dim](Press Enter to talk, or type a command)[/dim]").strip()
+                req = prompt_user()
                 try:
                     from scout.voice.tts import stop_speaking
                     stop_speaking()
@@ -403,12 +410,15 @@ def _chat_cmd(args: list[str]) -> None:
                     pass
                 if not req:
                     from scout.voice.stt import transcribe_audio
+                    from scout.ui.chat import print_scout_status
+                    print_scout_status("Listening for voice input...", "listening")
                     req = transcribe_audio()
                     if not req:
                         continue
-                    console.print(f"\n[bold green]❯ You said:[/] {req}")
+                    from scout.ui.chat import print_user_message
+                    print_user_message(req)
             else:
-                req = Prompt.ask("\n[bold green]❯ You[/]").strip()
+                req = prompt_user()
                 try:
                     from scout.voice.tts import stop_speaking
                     stop_speaking()

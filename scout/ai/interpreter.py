@@ -34,7 +34,7 @@ Your objective is to fulfill the user's request.
 
 REMEMBER: You are a very friendly and brother like agent, reply with a very positive attitude and a fun slang so that the user feels very comfortable to use you. 
 And also always address the user with sir, not any nickname or something.
-
+ You don't have to start every message with a "Hey there" or "Hello there" or "Hi". Only when the user is greeting you, you have to use them, after that, just continue with the flow without making the users feel like they are starting the whole chat again
 
 # Rules
 1. ALWAYS inspect tool results. If a tool fails, try a different approach.
@@ -117,11 +117,10 @@ class _Cancelled(Exception):
 
 
 def _print_response(text: str) -> None:
-    from rich.markdown import Markdown
-    from rich.panel import Panel
-
-    console.print("\n[bold cyan]Scout[/]")
-    console.print(Panel(Markdown(text), border_style="cyan"))
+    from scout.ui.chat import print_scout_message
+    if not text:
+        return
+    print_scout_message(text)
     
     try:
         import scout.commands.ai_cmd as ai_cmd
@@ -160,9 +159,10 @@ class AIInterpreter:
 
     # ── Shared helpers ─────────────────────────────────────────────────
 
-    def _completion(self, tools: list[dict], status: str = "[bold cyan]AI is thinking...[/]") -> dict:
+    def _completion(self, tools: list[dict], status: str = "Neural core processing...") -> dict:
         """Call the provider and append the (sanitized) assistant message to history."""
-        with console.status(status):
+        from scout.ui.activity import scout_activity
+        with scout_activity("Neural core processing...", "thinking"):
             response = self.provider.chat_completion(self.system_prompt, self.messages, tools=tools)
 
         choice = response.get("choices", [{}])[0].get("message", {})
@@ -203,6 +203,46 @@ class AIInterpreter:
         except json.JSONDecodeError:
             return {}, args_str
 
+    @staticmethod
+    def _format_action_summary(func_name: str, args: dict) -> tuple[str, str]:
+        """Return (summary_for_status, detail_for_confirmation_and_output)."""
+        if func_name == "run_command":
+            cmd = str(args.get("command") or "").strip()
+            return (f"run_command › {cmd}" if cmd else "run_command", cmd)
+        elif func_name in ("write_file", "read_file", "create_directory"):
+            path = str(args.get("path") or "").strip()
+            return (f"{func_name} › {path}" if path else func_name, path)
+        elif func_name == "open_application":
+            app = str(args.get("name") or args.get("path") or "").strip()
+            return (f"open_application › {app}" if app else func_name, app)
+        elif func_name == "open_url":
+            url = str(args.get("url") or "").strip()
+            return (f"open_url › {url}" if url else func_name, url)
+        elif func_name == "computer":
+            action = str(args.get("action") or "").strip()
+            if action in ("click", "double_click", "move"):
+                detail = f"{action} at ({args.get('x', '?')}, {args.get('y', '?')})"
+            elif action == "type":
+                txt = str(args.get("text") or "")
+                detail = f'type "{txt[:40]}..."' if len(txt) > 40 else f'type "{txt}"'
+            elif action in ("key", "hotkey"):
+                detail = f"{action} {args.get('key') or args.get('keys', '')}"
+            elif action == "activate_window":
+                detail = f"activate window '{args.get('title', '')}'"
+            else:
+                detail = action
+            return (f"computer › {detail}", detail)
+        elif func_name in ("verify_screen", "analyze_screen"):
+            prompt = str(args.get("prompt") or "").strip()
+            trunc = f"{prompt[:40]}..." if len(prompt) > 40 else prompt
+            return (f"{func_name} › {trunc}" if prompt else func_name, prompt)
+        else:
+            if args:
+                first_val = next(iter(args.values()), None)
+                if isinstance(first_val, str) and first_val:
+                    return (f"{func_name} › {first_val[:40]}", first_val)
+            return (func_name, "")
+
     def _run_tool(self, tool_call: dict) -> None:
         """Display, safety-check, execute one tool call and record its result.
 
@@ -213,7 +253,11 @@ class AIInterpreter:
         func_name = tool_call["function"]["name"]
         args, args_str = self._parse_args(tool_call)
 
-        console.print(Panel(f"[dim]{escape(args_str)}[/dim]", title=f"[bold yellow]⚙ {func_name}[/]", title_align="left", border_style="yellow", padding=(0, 1)))
+        summary, detail = self._format_action_summary(func_name, args)
+
+        from scout.ui.chat import print_scout_status
+        tool_state = "verifying" if func_name in ("verify_screen", "analyze_screen") else "executing"
+        print_scout_status(f"Running {summary}...", tool_state)
 
         # Check safety
         risk = _get_risk_level(func_name)
@@ -236,19 +280,43 @@ class AIInterpreter:
 
         proceed = True
         if risk == "HIGH_RISK":
-            proceed = Confirm.ask(f"[bold red]Allow HIGH RISK action '{func_name}'?[/]", default=False)
+            prompt = (
+                f"\n  [bold red]⚠️  Allow HIGH RISK action '{func_name}'?[/]\n"
+                f"  [bold red]Target:[/]  [bold white]{escape(detail or summary)}[/]\n"
+                f"  [dim red]Authorize HIGH RISK execution?[/dim red]"
+            )
+            proceed = Confirm.ask(prompt, default=False)
         elif risk == "CONFIRM":
-            proceed = Confirm.ask(f"[yellow]Allow action '{func_name}'?[/]", default=True)
+            if func_name == "run_command":
+                prompt = (
+                    f"\n  [bold yellow]Allow command execution?[/]\n"
+                    f"  [bold cyan]Command:[/] [bold white]{escape(detail)}[/]\n"
+                    f"  [dim]Authorize command?[/dim]"
+                )
+            elif detail:
+                prompt = (
+                    f"\n  [bold yellow]Allow action '{func_name}'?[/]\n"
+                    f"  [bold cyan]Target:[/] [bold white]{escape(detail)}[/]\n"
+                    f"  [dim]Authorize?[/dim]"
+                )
+            else:
+                prompt = f"\n  [yellow]Allow action '{func_name}'?[/]"
+            proceed = Confirm.ask(prompt, default=True)
 
         if not proceed:
             raise _Cancelled()
+        console.print()
 
         # Execute
         result = execute_tool(func_name, args)
         if result.success:
-            console.print(f"[green][RESULT] success:[/green] {escape(result.message)}")
+            print_scout_status(f"Completed {summary}", "success")
+            if func_name == "run_command" and result.message.strip():
+                from scout.ui.chat import print_command_output
+                print_command_output(detail, result.message)
         else:
-            console.print(f"[red][RESULT] failed:[/red] {escape(result.message)}")
+            from scout.ui.chat import print_scout_error
+            print_scout_error(f"{func_name} failed: {result.message}")
 
         self._add_tool_result(tool_call, result.message if result.success else f"ERROR: {result.message}")
 
@@ -257,8 +325,6 @@ class AIInterpreter:
     def _run_loop(self) -> None:
         max_iterations = 15
         tools = get_tools()
-
-        console.print("[dim]Scout: AI agent online.[/dim]")
 
         try:
             for _ in range(max_iterations):

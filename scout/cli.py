@@ -15,7 +15,9 @@ from scout.core.registry import registry
 # ── Import command modules so they self-register ───────────────────────
 import scout.commands.ai_cmd        # noqa: F401
 
-console = Console()
+from scout.ui.theme import scout_theme
+
+console = Console(theme=scout_theme)
 
 # ── Help group display order ───────────────────────────────────────────
 _GROUP_ORDER = ["AI Agent", "General"]
@@ -32,28 +34,35 @@ def _help_cmd(args: list[str]) -> None:
         cmds = groups.pop(group_name, None)
         if not cmds:
             continue
-        console.print(f"  [bold cyan]{group_name.upper()}[/]")
+        console.print(f"  [bold primary]{group_name.upper()}[/]")
         for cmd in cmds:
             aliases = ""
             if cmd.aliases:
                 aliases = f" [dim]({', '.join(cmd.aliases)})[/dim]"
-            console.print(f"    [bold]{cmd.usage:<28}[/] {cmd.description}{aliases}")
+            console.print(f"    [bold]{cmd.usage:<28}[/] [text]{cmd.description}[/]{aliases}")
         console.print()
 
     # Any remaining groups not in _GROUP_ORDER
     for group_name, cmds in sorted(groups.items()):
-        console.print(f"  [bold cyan]{group_name.upper()}[/]")
+        console.print(f"  [bold primary]{group_name.upper()}[/]")
         for cmd in cmds:
             aliases = ""
             if cmd.aliases:
                 aliases = f" [dim]({', '.join(cmd.aliases)})[/dim]"
-            console.print(f"    [bold]{cmd.usage:<28}[/] {cmd.description}{aliases}")
+            console.print(f"    [bold]{cmd.usage:<28}[/] [text]{cmd.description}[/]{aliases}")
         console.print()
 
 
 def _clear_cmd(args: list[str]) -> None:
     """Clear the terminal screen."""
     os.system("cls" if os.name == "nt" else "clear")  # noqa: S605
+    try:
+        from scout.user_config import load_config
+        from scout.ui.header import print_persistent_header
+        cfg = load_config()
+        print_persistent_header(cfg.get("ai", {}).get("model", "unknown"))
+    except Exception:
+        pass
 
 
 def _exit_cmd(args: list[str]) -> None:
@@ -70,12 +79,17 @@ registry.register("exit", _exit_cmd, "exit", "Exit Scout.", aliases=["quit", "q"
 # ── Banner ─────────────────────────────────────────────────────────────
 
 def _print_banner() -> None:
-    banner = Text()
-    banner.append("\n  SCOUT", style="bold cyan")
-    banner.append(f"  v{__version__}", style="dim")
-    banner.append("\n  Personal Windows Automation Assistant\n", style="dim")
-    console.print(banner)
-    console.print("  [dim]Type [bold]help[/bold] for available commands.[/dim]\n")
+    try:
+        from scout.ui.startup import animate_startup
+        animate_startup()
+    except ImportError:
+        # Fallback if UI is not available
+        banner = Text()
+        banner.append("\n  SCOUT", style="bold cyan")
+        banner.append(f"  v{__version__}", style="dim")
+        banner.append("\n  Personal Windows Automation Assistant\n", style="dim")
+        console.print(banner)
+        console.print("  [dim]Type [bold]help[/bold] for available commands.[/dim]\n")
 
 
 # ── Main loop ──────────────────────────────────────────────────────────
