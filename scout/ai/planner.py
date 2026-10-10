@@ -39,8 +39,10 @@ You MUST reply by calling the `submit_plan` tool exactly once. NEVER hallucinate
 If you want to converse with the user, explain something, or provide commentary, you MUST use `submit_plan` with `mode="respond"` and put your text in the `response` parameter!
 Never reply with plain text.
 
-REMEMBER: You are a very friendly and brother like agent planner, reply with a very positive attitude and a fun slang so that the user feels very comfortable to use you. And also always address the user with sir, not any nickname or something.
- You don't have to start every message with a "Hey there" or "Hello there" or "Hi". Only when the user is greeting you, you have to use them, after that, just continue with the flow without making the users feel like they are starting the whole chat again
+REMEMBER: You are a very friendly, helpful, direct, and highly efficient agent. Always address the user as "sir" and always have a fun vibe with a fun slang.
+REMEMBER: YOU SHOULD NOT START EVERY REPLY WITH A GREETING (like "Hey there, sir", or "Hello there, sir"). ONLY WHENT THE USER IS GREETING YOU, YOU HAVE TO GREET THEM BACK.
+YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVELY ABOUT THE VOICE COMMANDS. THE COMMAND TO ENABLE VOICE IS "/voice".
+
 # Modes
 - mode="respond": no computer actions are needed - greetings, general knowledge, questions answerable from the
   memory/context below, or requests that are TRULY impossible with the available tools. Put the complete answer for
@@ -158,9 +160,9 @@ class Planner:
 
     # ── Public API ─────────────────────────────────────────────────────
 
-    def generate_plan(self, request: str, memory_context: str = "") -> Plan | None:
+    def generate_plan(self, request: str, memory_context: str = "", chat_history: list[dict] | None = None) -> Plan | None:
         """Plan how to handle the user's request. Returns None on hard failure."""
-        return self._request_plan(request, request, memory_context)
+        return self._request_plan(request, request, memory_context, chat_history=chat_history)
 
     def revise_plan(
         self,
@@ -168,6 +170,7 @@ class Planner:
         history: list[tuple[PlanStep, str, str]],
         remaining: list[PlanStep],
         memory_context: str = "",
+        chat_history: list[dict] | None = None,
     ) -> Plan | None:
         """Re-plan after a step failed.
 
@@ -184,7 +187,7 @@ class Planner:
             "request (do not repeat completed steps). Use a different approach for the failed part. If the request "
             "cannot be completed with the available tools, use mode='respond' and explain why."
         )
-        return self._request_plan("\n".join(lines), request, memory_context, status_text="Planner is revising the plan...")
+        return self._request_plan("\n".join(lines), request, memory_context, status_text="Planner is revising the plan...", chat_history=chat_history)
 
     # ── Internals ──────────────────────────────────────────────────────
 
@@ -194,6 +197,7 @@ class Planner:
         memory_query: str,
         memory_context: str,
         status_text: str | None = None,
+        chat_history: list[dict] | None = None,
     ) -> Plan | None:
         from scout.memory.store import get_memory_store
 
@@ -201,10 +205,16 @@ class Planner:
 
         system_prompt = PLANNER_PROMPT.replace("{tool_reference}", _build_tool_reference())
         if memory_context:
-            system_prompt += f"\n\n# Recent Conversation / Execution Context\n{memory_context}"
+            system_prompt += f"\n\n# User Profile & Preferences\n{memory_context}"
 
         user_content = f"{mem_block}\n\nUSER REQUEST:\n{prompt}" if mem_block else prompt
-        messages: list[dict] = [{"role": "user", "content": user_content}]
+        
+        messages: list[dict] = []
+        if chat_history:
+            messages.extend(chat_history)
+        
+        messages.append({"role": "user", "content": user_content})
+        
         tools = get_planner_tools()
         status_text = status_text or f"Planner ({self.provider.__class__.__name__}) is generating the plan..."
 

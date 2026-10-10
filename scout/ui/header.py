@@ -151,31 +151,39 @@ def build_identity_block(
     if info["is_dual"]:
         id_lines = [
             f"  [bold {c_cyan}]SCOUT NEURAL CORE[/] [dim]v{__version__}[/]",
-            f"  [{c_dim}]AUTONOMOUS PERSONAL AI AGENT[/{c_dim}]",
+            f"  [{c_dim}]AUTONOMOUS AI AGENT[/{c_dim}]",
             f"  ",
             f"  [{c_dim}]STATE:[/]    [{c_mint}]● {agent_state}[/{c_mint}]",
-            f"  [{c_dim}]PLANNER:[/]  [{c_ice}]{info['planner_model']}[/{c_ice}] [{c_dim}]({info['planner_provider']})[/{c_dim}]",
-            f"  [{c_dim}]EXECUTOR:[/] [{c_ice}]{info['executor_model']}[/{c_ice}] [{c_dim}]({info['executor_provider']})[/{c_dim}]",
-            f"  [{c_dim}]HOST:[/]     [{c_dim}]{os_info} · {tool_count} Tools Active · Memory Active[/{c_dim}]",
+            f"  [{c_dim}]PLANNER:[/]  [{c_ice}]{info['planner_model']}[/{c_ice}]",
+            f"  [{c_dim}]EXECUTOR:[/] [{c_ice}]{info['executor_model']}[/{c_ice}]",
+            f"  [{c_dim}]HOST:[/]     [{c_dim}]{os_info} · {tool_count} Tools[/{c_dim}]",
+            f"  [{c_dim}]MEMORY:[/]   [{c_mint}]ACTIVE[/{c_mint}]",
+            f"  [{c_dim}]VOICE:[/]    [{voice_style}]STT/TTS {voice_status}[/{voice_style}]",
+            f"  ",
+            f"  [{c_dim}]STATUS:[/]   [{c_mint}]NOMINAL[/{c_mint}]",
         ]
     else:
         id_lines = [
             f"  [bold {c_cyan}]SCOUT NEURAL CORE[/] [dim]v{__version__}[/]",
-            f"  [{c_dim}]AUTONOMOUS PERSONAL AI AGENT[/{c_dim}]",
+            f"  [{c_dim}]AUTONOMOUS AI AGENT[/{c_dim}]",
             f"  ",
             f"  [{c_dim}]STATE:[/]    [{c_mint}]● {agent_state}[/{c_mint}]",
-            f"  [{c_dim}]ENGINE:[/]   [{c_ice}]{model_name}[/{c_ice}] [{c_dim}]({provider_name})[/{c_dim}]",
-            f"  [{c_dim}]HOST:[/]     [{c_dim}]{os_info} · {tool_count} Tools Active · Memory Active[/{c_dim}]",
+            f"  [{c_dim}]ENGINE:[/]   [{c_ice}]{model_name}[/{c_ice}]",
+            f"  [{c_dim}]HOST:[/]     [{c_dim}]{os_info} · {tool_count} Tools[/{c_dim}]",
+            f"  [{c_dim}]MEMORY:[/]   [{c_mint}]ACTIVE[/{c_mint}]",
             f"  [{c_dim}]VOICE:[/]    [{voice_style}]STT/TTS {voice_status}[/{voice_style}]",
+            f"  [{c_dim}]MODULE:[/]   [{c_ice}]UNIFIED LOGIC[/{c_ice}]",
+            f"  ",
+            f"  [{c_dim}]STATUS:[/]   [{c_mint}]NOMINAL[/{c_mint}]",
         ]
 
     id_text = Text.from_markup("\n".join(id_lines))
-    divider_text = Text.from_markup("\n".join([f"[{c_border}]│[/{c_border}]"] * 7))
+    divider_text = Text.from_markup("\n".join([f"[{c_border}]│[/{c_border}]"] * 11))
 
     grid = Table.grid(padding=(0, 2))
-    grid.add_column("avatar", justify="left")
-    grid.add_column("divider", justify="center")
-    grid.add_column("identity", justify="left")
+    grid.add_column("avatar", justify="left", no_wrap=True)
+    grid.add_column("divider", justify="center", no_wrap=True)
+    grid.add_column("identity", justify="left", no_wrap=True)
 
     grid.add_row(avatar_text, divider_text, id_text)
     return grid

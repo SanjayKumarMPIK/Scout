@@ -143,6 +143,15 @@ def _tts_worker():
             except ImportError:
                 pass
                 
+            # Normalize smart quotes
+            clean_text = clean_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+            
+            # Replace standalone hyphens/dashes with a comma for a natural pause
+            clean_text = re.sub(r'\s+[-—–]+\s+', ', ', clean_text)
+            
+            # Change list numbers "1. " to "1, " to avoid splitting the sentence and causing TTS distortion
+            clean_text = re.sub(r'(?m)^(\d+)[\.\)]?\s+', r'\1, ', clean_text)
+            
             # Fix common phonemizer struggles
             clean_text = re.sub(r"\bI'm\b", "I am", clean_text, flags=re.IGNORECASE)
             

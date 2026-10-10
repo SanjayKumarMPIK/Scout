@@ -20,28 +20,29 @@ console = Console()
 MAX_REPLANS = 2
 
 
-def build_context(messages: list[dict], limit: int = 30) -> str:
-    """Summarize recent history (requests, tool calls, results) for the planner."""
-    lines: list[str] = []
+def build_chat_history(messages: list[dict], limit: int = 30) -> list[dict]:
+    """Reconstruct a clean chat history for the planner from the raw interpreter messages."""
+    history = []
     for msg in messages[-limit:]:
         role = msg.get("role")
         content = msg.get("content") or ""
+        
         if role == "user":
-            if content.startswith(("PLAN STEP", "The plan has finished", "Respond only with tool calls")):
+            if content.startswith(("PLAN STEP", "The plan has finished", "Respond only with tool calls", "Original Request:", "Did the user state any facts")):
                 continue
             if "USER REQUEST:" in content:
-                content = content.split("USER REQUEST:", 1)[1]
-            content = content.split("(A planner produced", 1)[0].strip()
-            lines.append(f"User: {content}")
-        elif role == "assistant":
+                content = content.split("USER REQUEST:", 1)[1].strip()
+            # Remove any trailing plan injection
+            if "(A planner produced" in content:
+                content = content.split("(A planner produced", 1)[0].strip()
             if content:
-                lines.append(f"Scout: {content}")
-            for tc in msg.get("tool_calls") or []:
-                fn = tc.get("function", {})
-                lines.append(f"Executor called {fn.get('name', '')}({fn.get('arguments', '')})")
-        elif role == "tool":
-            lines.append(f"Tool result: {content[:300]}")
-    return "\n".join(lines)
+                history.append({"role": "user", "content": content})
+                
+        elif role == "assistant":
+            if content and not msg.get("tool_calls"):
+                history.append({"role": "assistant", "content": content.strip()})
+    
+    return history
 
 
 def _show_plan(steps: list[PlanStep], title: str, start: int = 1) -> None:
@@ -61,8 +62,8 @@ def _report(history: list[tuple[PlanStep, str, str]]) -> str:
 
 
 def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str) -> None:
-    context = build_context(interpreter.messages)
-    plan: Plan | None = planner.generate_plan(request, memory_context=context)
+    chat_history = build_chat_history(interpreter.messages)
+    plan: Plan | None = planner.generate_plan(request, chat_history=chat_history)
     if plan is None:
         console.print("[red]Planner failed to generate a plan.[/]")
         return
@@ -109,7 +110,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
             break
 
         replans += 1
-        revised = planner.revise_plan(request, history, queue, memory_context=build_context(interpreter.messages))
+        revised = planner.revise_plan(request, history, queue, chat_history=build_chat_history(interpreter.messages))
         if revised is None:
             break
         if revised.mode == "respond":
@@ -127,7 +128,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
                 "If no, or if new issues arose that need fixing, use mode='execute' and generate the remaining steps."
             )
             with console.status("[bold cyan]Checking if goal was met...[/]"):
-                check_plan = planner.generate_plan(check_prompt, memory_context=build_context(interpreter.messages))
+                check_plan = planner.generate_plan(check_prompt, chat_history=build_chat_history(interpreter.messages))
             if check_plan and check_plan.mode == "execute" and check_plan.steps:
                 console.print("[yellow]Planner determined goal is not fully met. Adding remaining steps...[/yellow]")
                 _show_plan(check_plan.steps, "Additional Steps (Goal Verification)", start=len(history) + 1)

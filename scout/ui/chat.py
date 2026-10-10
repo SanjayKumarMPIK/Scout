@@ -92,7 +92,7 @@ def print_scout_message(text: str) -> None:
         for line in text.split("\n"):
             console.print(f"    [text]{escape(line)}[/]")
 
-    console.print(f"    [{c_dim}]╶─ scout[/{c_dim}] [{c_teal}]✦[/{c_teal}] [{c_dim}]turn completed[/{c_dim}]")
+    console.print(f"    [{c_dim}]╺━━ scout[/{c_dim}] [{c_teal}]✦[/{c_teal}] [{c_dim}]turn completed[/{c_dim}]")
     console.print()
 
 
@@ -130,7 +130,7 @@ def print_scout_status(status: str, state: str = "idle") -> None:
         label = f"[{c_dim}]info[/{c_dim}]"
         detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
 
-    console.print(f"    [{c_dim}]╶─[/{c_dim}] {icon} {label} {detail}")
+    console.print(f"    [{c_dim}]╺━━[/{c_dim}] {icon} {label} {detail}")
 
 
 def print_command_output(command: str, output: str, max_lines: int = 12) -> None:

@@ -24,6 +24,10 @@ THEME_COLORS = {
     "warning": "#FBBF24",        # Amber (warning / safety confirmation)
     "error": "#F87171",          # Muted coral (errors)
     
+    # Sci-Fi / Data Pulses Accents
+    "magenta": "#FF007F",        # Neon magenta priority packet
+    "purple": "#A855F7",         # Electric purple latent state
+    
     # Aliases for backward compatibility
     "accent": "#DDFBFF",
     "core_glow": "#42E8D5",
@@ -44,4 +48,6 @@ scout_theme = Theme({
     "warning": THEME_COLORS["warning"],
     "error": THEME_COLORS["error"],
     "info": THEME_COLORS["ice"],
+    "magenta": THEME_COLORS["magenta"],
+    "purple": THEME_COLORS["purple"],
 })
