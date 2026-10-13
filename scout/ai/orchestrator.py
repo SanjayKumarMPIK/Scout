@@ -7,6 +7,9 @@ revises the remaining plan (visibly), so what runs is always what was shown.
 
 from __future__ import annotations
 
+import json
+import re
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
@@ -28,19 +31,42 @@ def build_chat_history(messages: list[dict], limit: int = 30) -> list[dict]:
         content = msg.get("content") or ""
         
         if role == "user":
-            if content.startswith(("PLAN STEP", "The plan has finished", "Respond only with tool calls", "Original Request:", "Did the user state any facts")):
+            if content.startswith((
+                "PLAN STEP", 
+                "The plan has finished", 
+                "Respond only with tool calls", 
+                "Original Request:", 
+                "Did the user state any facts",
+                "Results of previous steps:",
+            )):
                 continue
+            # Strip memory wrappers if present
+            content = re.sub(r"<relevant_memory>.*?</relevant_memory>", "", content, flags=re.DOTALL).strip()
             if "USER REQUEST:" in content:
                 content = content.split("USER REQUEST:", 1)[1].strip()
             # Remove any trailing plan injection
             if "(A planner produced" in content:
                 content = content.split("(A planner produced", 1)[0].strip()
+            content = content.strip()
             if content:
                 history.append({"role": "user", "content": content})
                 
         elif role == "assistant":
-            if content and not msg.get("tool_calls"):
-                history.append({"role": "assistant", "content": content.strip()})
+            text = content.strip() if content else ""
+            if not text and msg.get("tool_calls"):
+                for tc in msg.get("tool_calls") or []:
+                    fn = tc.get("function", {})
+                    if fn.get("name") == "complete_task":
+                        args = fn.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {}
+                        text = str(args.get("response") or "").strip()
+                        break
+            if text:
+                history.append({"role": "assistant", "content": text})
     
     return history
 
@@ -71,8 +97,10 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
     # Direct answer: nothing to execute, so nothing can diverge.
     if plan.mode == "respond":
         _print_response(plan.response)
-        interpreter.messages.append({"role": "user", "content": f"USER REQUEST: {request}"})
-        interpreter.messages.append({"role": "assistant", "content": plan.response})
+        interpreter.messages = chat_history + [
+            {"role": "user", "content": request},
+            {"role": "assistant", "content": plan.response},
+        ]
         return
 
     _show_plan(plan.steps, "Execution Plan")
@@ -102,6 +130,10 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
 
         if outcome.status == "cancelled":
             console.print(f"[yellow]■ Plan stopped at step {number}: {escape(outcome.result)}[/]")
+            interpreter.messages = chat_history + [
+                {"role": "user", "content": request},
+                {"role": "assistant", "content": f"Plan stopped at step {number}: {outcome.result}"},
+            ]
             return
 
         console.print(f"[red]✗ Step {number} failed:[/] {escape(outcome.result)}")
@@ -110,7 +142,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
             break
 
         replans += 1
-        revised = planner.revise_plan(request, history, queue, chat_history=build_chat_history(interpreter.messages))
+        revised = planner.revise_plan(request, history, queue, chat_history=chat_history)
         if revised is None:
             break
         if revised.mode == "respond":
@@ -128,7 +160,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
                 "If no, or if new issues arose that need fixing, use mode='execute' and generate the remaining steps."
             )
             with console.status("[bold cyan]Checking if goal was met...[/]"):
-                check_plan = planner.generate_plan(check_prompt, chat_history=build_chat_history(interpreter.messages))
+                check_plan = planner.generate_plan(check_prompt, chat_history=chat_history)
             if check_plan and check_plan.mode == "execute" and check_plan.steps:
                 console.print("[yellow]Planner determined goal is not fully met. Adding remaining steps...[/yellow]")
                 _show_plan(check_plan.steps, "Additional Steps (Goal Verification)", start=len(history) + 1)
@@ -142,7 +174,12 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
     if planner_note:
         report += f"\n\nPlanner note: {planner_note}"
     
-    interpreter.finalize(request, report)
+    final_response = interpreter.finalize(request, report)
+    # Collapse execution trace into a clean conversational turn
+    interpreter.messages = chat_history + [
+        {"role": "user", "content": request},
+        {"role": "assistant", "content": final_response or report},
+    ]
     
     # Automatically learn facts into memory
     with console.status("[bold cyan]Extracting memory...[/]"):

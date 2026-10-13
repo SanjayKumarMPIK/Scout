@@ -237,9 +237,16 @@ def _tts_worker():
 
 
 import logging
+import warnings
 
-# Suppress harmless phonemizer warnings (e.g. "words count mismatch")
-logging.getLogger("phonemizer").setLevel(logging.ERROR)
+# Aggressively suppress harmless phonemizer warnings
+logging.getLogger("phonemizer").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", category=UserWarning, module="phonemizer")
+try:
+    import phonemizer.logger
+    phonemizer.logger.get_logger().setLevel(logging.CRITICAL)
+except ImportError:
+    pass
 
 def speak(text: str):
     global _speak_thread, _stop_event

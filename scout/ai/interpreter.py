@@ -17,8 +17,17 @@ console = Console()
 
 # ── Risk levels ────────────────────────────────────────────────────────
 
-SAFE = {"computer", "list_windows", "get_active_window", "find_window", "minimize_window", "maximize_window", "list_files", "read_file", "system_info", "project_info", "git_status", "git_log", "git_branch", "open_application", "open_url", "project_open", "complete_task", "verify_screen", "analyze_screen"}
-CONFIRM = {"close_window", "run_command", "project_run", "git_pull", "git_commit", "write_file", "create_directory", "change_directory"}
+SAFE = {
+    "computer", "list_windows", "get_active_window", "find_window", "minimize_window",
+    "maximize_window", "list_files", "read_file", "system_info", "project_info",
+    "git_status", "git_log", "git_branch", "open_application", "open_url",
+    "project_open", "complete_task", "verify_screen", "analyze_screen",
+    "web_search", "fetch_webpage", "browser_navigate", "browser_extract", "browser_close",
+}
+CONFIRM = {
+    "close_window", "run_command", "project_run", "git_pull", "git_commit",
+    "write_file", "create_directory", "change_directory", "browser_interact",
+}
 HIGH_RISK = {"git_push"}
 
 def _get_risk_level(action_type: str) -> str:
@@ -241,6 +250,26 @@ class AIInterpreter:
             prompt = str(args.get("prompt") or "").strip()
             trunc = f"{prompt[:40]}..." if len(prompt) > 40 else prompt
             return (f"{func_name} › {trunc}" if prompt else func_name, prompt)
+        elif func_name == "web_search":
+            queries = args.get("queries") or args.get("query") or ""
+            q_text = ", ".join(queries) if isinstance(queries, list) else str(queries)
+            return (f"web_search › {q_text[:40]}", q_text)
+        elif func_name == "fetch_webpage":
+            url = str(args.get("url") or "")
+            return (f"fetch_webpage › {url[:40]}", url)
+        elif func_name == "browser_navigate":
+            url = str(args.get("url") or "")
+            return (f"browser_navigate › {url[:40]}", url)
+        elif func_name == "browser_extract":
+            ext_type = str(args.get("extract_type") or "all")
+            sel = str(args.get("selector") or "")
+            detail = f"{ext_type} ({sel})" if sel else ext_type
+            return (f"browser_extract › {detail}", detail)
+        elif func_name == "browser_interact":
+            act = str(args.get("action") or "")
+            target = str(args.get("selector") or args.get("text") or args.get("direction") or "")
+            detail = f"{act} on {target}" if target else act
+            return (f"browser_interact › {detail}", detail)
         else:
             if args:
                 first_val = next(iter(args.values()), None)
@@ -272,6 +301,12 @@ class AIInterpreter:
             from scout.core.safety import is_destructive
             if is_destructive(args.get("command", "")):
                 risk = "HIGH_RISK"
+        elif func_name == "browser_interact":
+            if args.get("action") in ("scroll", "wait"):
+                risk = "SAFE"
+            else:
+                risk = "CONFIRM"
+
 
         # IMPORTANT: Before prompting the user (which steals focus to the terminal),
         # capture the current active window (e.g. a Save As dialog that opened recently)
@@ -509,7 +544,7 @@ class AIInterpreter:
         except Exception as e:  # noqa: BLE001
             console.print(f"[red]Error communicating with AI:[/] {escape(str(e))}")
             _print_response(report)
-            return
+            return report
 
         text = (choice.get("content") or "").strip()
         for tc in choice.get("tool_calls") or []:
@@ -517,4 +552,7 @@ class AIInterpreter:
                 args, _ = self._parse_args(tc)
                 text = str(args.get("response") or "").strip()
             self._add_tool_result(tc, "Task completed successfully.")
-        _print_response(text or report)
+        final_answer = text or report
+        _print_response(final_answer)
+        return final_answer
+

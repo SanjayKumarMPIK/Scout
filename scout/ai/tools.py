@@ -287,7 +287,7 @@ def tool_find_window(title: str) -> StepResult:
 
 @register_tool(
     name="close_window",
-    description="Close a window gracefully by its partial title.",
+    description="Close a window gracefully by its partial title. WARNING: If the window is a web browser (e.g. Chrome, Edge), this will close the ENTIRE browser and ALL tabs. To close a single tab, DO NOT use this tool; use the `computer` tool to activate the window and press `ctrl+w` instead.",
     parameters={
         "type": "object",
         "properties": {
@@ -548,3 +548,260 @@ def tool_computer(**kwargs) -> StepResult:
     msg = json.dumps(res)
     
     return StepResult(success, msg)
+
+# -- Web Research & Browser Automation Tools --
+
+@register_tool(
+    name="web_search",
+    description="Search the web for information, documentation, news, or answers. Supports multiple queries for complex research. Returns titles, URLs, snippets, and publication dates.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "One or more search queries to research the topic thoroughly."
+            },
+            "query": {
+                "type": "string",
+                "description": "Optional single query string (alternative to queries)."
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default: 6)."
+            }
+        }
+    }
+)
+def tool_web_search(queries: list[str] | None = None, query: str = "", max_results: int = 6) -> StepResult:
+    from scout.web.search import search_web, SearchProviderError
+    try:
+        search_inputs = []
+        if queries:
+            search_inputs.extend(queries)
+        if query:
+            search_inputs.append(query)
+        if not search_inputs:
+            return StepResult(False, "No search query provided. Please specify 'queries' or 'query'.")
+
+        results = search_web(search_inputs, max_results=max_results)
+        if not results:
+            return StepResult(True, "Web search returned no matching results for the specified queries.")
+
+        import json
+        formatted_list = [r.to_dict() for r in results]
+        return StepResult(True, json.dumps(formatted_list, indent=2))
+    except SearchProviderError as e:
+        return StepResult(False, f"Search provider error: {e}")
+    except Exception as e:
+        return StepResult(False, f"Web search failed: {e}")
+
+
+@register_tool(
+    name="fetch_webpage",
+    description="Fetch a publicly accessible webpage using fast direct HTTP and extract its readable text, headings, links, and metadata. Detects if the page requires JavaScript rendering. Prefer this over browser automation for static pages.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The HTTP or HTTPS URL of the webpage to fetch."
+            }
+        },
+        "required": ["url"]
+    }
+)
+def tool_fetch_webpage(url: str) -> StepResult:
+    from scout.web.fetcher import fetch_webpage
+    from scout.web.security import SecurityError
+    try:
+        page = fetch_webpage(url)
+        return StepResult(True, page.to_formatted_text())
+    except SecurityError as e:
+        return StepResult(False, f"Security restriction: {e}")
+    except Exception as e:
+        return StepResult(False, f"Failed to fetch webpage '{url}': {e}")
+
+
+@register_tool(
+    name="browser_navigate",
+    description="Open a URL in a real browser session. Use when JavaScript rendering, dynamic content, or browser interaction is required.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The URL to navigate to in the browser."
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "description": "Optional navigation timeout in milliseconds (default 25000)."
+            }
+        },
+        "required": ["url"]
+    }
+)
+def tool_browser_navigate(url: str, timeout_ms: int | None = None) -> StepResult:
+    from scout.web.browser import get_browser_session, BrowserSessionError
+    from scout.web.security import SecurityError
+    try:
+        session = get_browser_session()
+        res = session.navigate(url, timeout_ms=timeout_ms)
+        if res.get("success"):
+            return StepResult(True, res["formatted"])
+        return StepResult(False, f"Browser navigation failed: {res.get('error')}")
+    except SecurityError as e:
+        return StepResult(False, f"Security restriction: {e}")
+    except BrowserSessionError as e:
+        return StepResult(False, f"Browser session error: {e}")
+    except Exception as e:
+        return StepResult(False, f"Browser error: {e}")
+
+
+@register_tool(
+    name="browser_extract",
+    description="Extract structured information from the active browser page: text, headings, links, tables, lists, specific selector elements, or named structured fields.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "extract_type": {
+                "type": "string",
+                "enum": ["all", "text", "links", "tables", "lists", "elements"],
+                "description": "The type of information to extract (default 'all')."
+            },
+            "selector": {
+                "type": "string",
+                "description": "Optional CSS selector to extract specific elements (used with extract_type='elements' or alongside other types)."
+            },
+            "fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of specific named fields to extract (e.g. ['price', 'title', 'rating', 'availability'])."
+            },
+            "next_selector": {
+                "type": "string",
+                "description": "Optional selector for next-page button when extracting across paginated pages."
+            },
+            "max_pages": {
+                "type": "integer",
+                "description": "Maximum pages to navigate across during pagination (default 1)."
+            }
+        }
+    }
+)
+def tool_browser_extract(
+    extract_type: str = "all",
+    selector: str = "",
+    fields: list[str] | None = None,
+    next_selector: str = "",
+    max_pages: int = 1,
+) -> StepResult:
+    from scout.web.browser import get_browser_session, BrowserSessionError
+    try:
+        session = get_browser_session()
+        res = session.extract(
+            extract_type=extract_type,
+            selector=selector,
+            fields=fields,
+            next_selector=next_selector,
+            max_pages=max_pages,
+        )
+        return StepResult(True, res["formatted"])
+    except BrowserSessionError as e:
+        return StepResult(False, str(e))
+    except Exception as e:
+        return StepResult(False, f"Browser extraction failed: {e}")
+
+
+@register_tool(
+    name="browser_interact",
+    description="Interact with the active browser page: click a visible element, type into an input field, select a dropdown option, scroll, navigate, or wait. Returns updated page state.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["click", "type", "select_option", "scroll", "navigate", "wait"],
+                "description": "The browser action to perform."
+            },
+            "selector": {
+                "type": "string",
+                "description": "Target element selector (CSS, text=..., role=..., or label=...)."
+            },
+            "text": {
+                "type": "string",
+                "description": "Text to type into fields or URL to navigate."
+            },
+            "value": {
+                "type": "string",
+                "description": "Option value or label for select_option."
+            },
+            "direction": {
+                "type": "string",
+                "enum": ["down", "up", "top", "bottom"],
+                "description": "Scroll direction (default 'down')."
+            },
+            "amount": {
+                "type": "integer",
+                "description": "Scroll distance in pixels (default 500)."
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "description": "Timeout in milliseconds for element readiness (default 10000)."
+            }
+        },
+        "required": ["action"]
+    }
+)
+def tool_browser_interact(
+    action: str,
+    selector: str = "",
+    text: str = "",
+    value: str = "",
+    direction: str = "down",
+    amount: int = 500,
+    timeout_ms: int = 10000,
+) -> StepResult:
+    from scout.web.browser import get_browser_session, BrowserSessionError
+    from scout.web.security import SecurityError
+    import json
+    try:
+        session = get_browser_session()
+        res = session.interact(
+            action=action,
+            selector=selector,
+            text=text,
+            value=value,
+            direction=direction,
+            amount=amount,
+            timeout_ms=timeout_ms,
+        )
+        success = res.get("success", False)
+        if success:
+            return StepResult(True, res.get("observation", json.dumps(res)))
+        return StepResult(False, f"Browser interaction failed: {res.get('error', 'unknown error')}")
+    except SecurityError as e:
+        return StepResult(False, f"Security restriction: {e}")
+    except BrowserSessionError as e:
+        return StepResult(False, str(e))
+    except Exception as e:
+        return StepResult(False, f"Browser interaction error: {e}")
+
+
+@register_tool(
+    name="browser_close",
+    description="Close the active browser session and release browser resources.",
+    parameters={
+        "type": "object",
+        "properties": {}
+    }
+)
+def tool_browser_close() -> StepResult:
+    from scout.web.browser import get_browser_session
+    try:
+        session = get_browser_session()
+        session.close()
+        return StepResult(True, "Browser session closed successfully.")
+    except Exception as e:
+        return StepResult(False, f"Failed to close browser: {e}")
+
