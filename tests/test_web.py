@@ -25,6 +25,7 @@ from scout.web.fetcher import (
 )
 from scout.web.interact import perform_browser_action
 from scout.web.search import (
+    BingProvider,
     DuckDuckGoProvider,
     SearchResult,
     SearchProviderError,
@@ -143,6 +144,94 @@ def test_duckduckgo_search_parsing():
     assert results[0].url == "https://python.org/"
     assert results[0].published_date == "May 10, 2024"
     assert "Official website" in results[0].snippet
+
+
+def test_duckduckgo_detects_bot_challenge():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 202
+    mock_resp.text = "<html><body>Unfortunately, bots use DuckDuckGo too. Complete the challenge</body></html>"
+
+    provider = DuckDuckGoProvider()
+    with patch("httpx.Client.post", return_value=mock_resp):
+        with pytest.raises(SearchProviderError, match="anti-bot challenge"):
+            provider.search("test query")
+
+
+def test_bing_search_parsing():
+    html_sample = """
+    <ol id="b_results">
+      <li class="b_algo">
+        <h2>
+          <a href="https://www.bing.com/ck/a?!&&p=123&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9pbnRlcm5zaGlw&ntb=1">
+            Software Engineering Intern - Remote
+          </a>
+        </h2>
+        <div class="b_caption">
+          <p>Oct 15, 2026 · We offer a remote internship with $3,000 monthly stipend.</p>
+        </div>
+      </li>
+      <li class="b_algo">
+        <h2>
+          <a href="https://careers.google.com/jobs/results/123">
+            Google AI Resident
+          </a>
+        </h2>
+        <p class="b_algoSlug">Work on machine learning research and engineering.</p>
+      </li>
+    </ol>
+    """
+    mock_resp = MagicMock()
+    mock_resp.text = html_sample
+    mock_resp.status_code = 200
+
+    provider = BingProvider()
+    with patch("httpx.Client.get", return_value=mock_resp):
+        results = provider.search("remote internship stipend", max_results=5)
+
+    assert len(results) == 2
+    # Verify base64 decoded redirect URL
+    assert results[0].url == "https://example.com/internship"
+    assert results[0].title == "Software Engineering Intern - Remote"
+    assert results[0].published_date == "Oct 15, 2026"
+    assert "stipend" in results[0].snippet
+
+    # Verify direct URL
+    assert results[1].url == "https://careers.google.com/jobs/results/123"
+    assert results[1].title == "Google AI Resident"
+
+
+def test_search_web_automatic_fallback_on_ddg_challenge():
+    mock_ddg = MagicMock()
+    mock_ddg.search.side_effect = SearchProviderError("DuckDuckGo rate limit or anti-bot challenge encountered.")
+
+    bing_results = [
+        SearchResult(title="AI Intern", url="https://ai.example.com", snippet="Stipend $4000/mo")
+    ]
+
+    with patch("scout.web.search.get_search_provider", return_value=mock_ddg):
+        with patch.object(BingProvider, "search", return_value=bing_results) as mock_bing_search:
+            results = search_web("remote AI intern stipend")
+
+    assert len(results) == 1
+    assert results[0].title == "AI Intern"
+    assert results[0].url == "https://ai.example.com"
+    mock_bing_search.assert_called_once()
+
+
+def test_search_web_fallback_on_zero_results():
+    mock_ddg = MagicMock()
+    mock_ddg.search.return_value = []  # Empty results from primary
+
+    bing_results = [
+        SearchResult(title="Frontend Intern", url="https://frontend.example.com", snippet="Remote react role")
+    ]
+
+    with patch("scout.web.search.get_search_provider", return_value=mock_ddg):
+        with patch.object(BingProvider, "search", return_value=bing_results):
+            results = search_web("frontend intern")
+
+    assert len(results) == 1
+    assert results[0].title == "Frontend Intern"
 
 
 def test_tavily_provider_requires_api_key():

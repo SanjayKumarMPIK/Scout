@@ -27,6 +27,13 @@ _speak_thread = None
 _stop_event = threading.Event()
 _is_initialized = False
 _init_lock = threading.Lock()
+_current_stream = None
+_is_speaking = False
+
+
+def is_speaking() -> bool:
+    """Return True if TTS is currently generating or playing audio."""
+    return _is_speaking and not _stop_event.is_set()
 
 
 def _download_file(url: str, path: Path, desc: str, expected_size: int = None) -> bool:
@@ -104,8 +111,72 @@ def _init_kokoro():
             return False
 
 
+def _start_keyboard_interrupter():
+    """Background listener for Esc, Space, Enter, or q keypresses to halt speech."""
+    try:
+        import msvcrt
+    except ImportError:
+        return
+
+    def _watcher():
+        while is_speaking():
+            try:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    # Esc (27 / \x1b), Space (' '), Enter ('\r'), Ctrl+C ('\x03'), 'q', 'Q', 's', 'S'
+                    if ch in (b'\x1b', b' ', b'\r', b'\x03', b'q', b'Q', b's', b'S'):
+                        stop_speaking()
+                        console.print("\n  [dim red]⏹ Speech stopped by keypress.[/dim red]")
+                        break
+            except Exception:
+                break
+            time.sleep(0.04)
+
+    t = threading.Thread(target=_watcher, daemon=True)
+    t.start()
+
+
+def _start_voice_barge_in():
+    """Background microphone listener for voice activity to interrupt speech."""
+    config = load_config()
+    voice_cfg = config.get("voice", {})
+    if not voice_cfg.get("barge_in", False):
+        return
+
+    threshold = float(voice_cfg.get("barge_in_threshold", 0.08))
+
+    def _mic_watcher():
+        try:
+            import sounddevice as sd
+            import numpy as np
+
+            # Brief delay to allow audio device initialization
+            time.sleep(0.25)
+            if not is_speaking():
+                return
+
+            def callback(indata, frames, time_info, status):
+                if not is_speaking():
+                    raise sd.CallbackStop()
+                rms = float(np.sqrt(np.mean(indata**2)))
+                if rms > threshold:
+                    stop_speaking()
+                    console.print("\n  [dim red]🎙️ Speech interrupted by voice.[/dim red]")
+                    raise sd.CallbackStop()
+
+            with sd.InputStream(samplerate=16000, channels=1, dtype='float32', callback=callback, blocksize=1024):
+                while is_speaking():
+                    time.sleep(0.05)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_mic_watcher, daemon=True)
+    t.start()
+
+
 def _tts_worker():
     import sounddevice as sd
+    global _current_stream, _is_speaking
     
     while True:
         text = _tts_queue.get()
@@ -211,6 +282,13 @@ def _tts_worker():
 
                 try:
                     with sd.OutputStream(samplerate=sr, channels=1, dtype='float32') as audio_stream:
+                        _current_stream = audio_stream
+                        _is_speaking = True
+
+                        # Launch real-time keypress & voice barge-in interrupters
+                        _start_keyboard_interrupter()
+                        _start_voice_barge_in()
+
                         for i in range(len(sentences)):
                             if _stop_event.is_set():
                                 break
@@ -219,9 +297,21 @@ def _tts_worker():
                             if i + 1 < len(sentences):
                                 next_future = executor.submit(_generate_chunk, sentences[i+1])
                                 
-                            # Play current sentence (blocks until finished)
-                            audio_stream.write(samples)
-                            
+                            # Stream in ~50ms slices (2048 samples) for instant interruption
+                            chunk_size = 2048
+                            for offset in range(0, len(samples), chunk_size):
+                                if _stop_event.is_set():
+                                    try:
+                                        audio_stream.abort()
+                                    except Exception:
+                                        pass
+                                    break
+                                chunk = samples[offset : offset + chunk_size]
+                                audio_stream.write(chunk)
+                                
+                            if _stop_event.is_set():
+                                break
+
                             if next_future:
                                 try:
                                     samples, _ = next_future.result()
@@ -229,9 +319,14 @@ def _tts_worker():
                                     console.print(f"\n[red]TTS Error:[/] {e}")
                                     break
                 except Exception as e:
-                    console.print(f"\n[red]TTS Audio Stream Error:[/] {e}")
+                    if not _stop_event.is_set():
+                        console.print(f"\n[red]TTS Audio Stream Error:[/] {e}")
+                finally:
+                    _current_stream = None
+                    _is_speaking = False
         except Exception as e:
-            console.print(f"\n[yellow]TTS playback error: {e}[/yellow]")
+            if not _stop_event.is_set():
+                console.print(f"\n[yellow]TTS playback error: {e}[/yellow]")
             
         _tts_queue.task_done()
 
@@ -264,12 +359,7 @@ def speak(text: str):
             break
             
     # Stop current playback
-    _stop_event.set()
-    try:
-        import sounddevice as sd
-        sd.stop()
-    except Exception:
-        pass
+    stop_speaking()
     
     if _speak_thread is None or not _speak_thread.is_alive():
         _stop_event.clear()
@@ -281,7 +371,25 @@ def speak(text: str):
 
 
 def stop_speaking():
+    global _current_stream, _is_speaking
     _stop_event.set()
+    _is_speaking = False
+
+    # Discard all pending items in the queue
+    while not _tts_queue.empty():
+        try:
+            _tts_queue.get_nowait()
+            _tts_queue.task_done()
+        except queue.Empty:
+            break
+
+    # Immediately abort active hardware audio stream
+    if _current_stream is not None:
+        try:
+            _current_stream.abort()
+        except Exception:
+            pass
+
     try:
         import sounddevice as sd
         sd.stop()

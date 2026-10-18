@@ -137,3 +137,49 @@ def test_run_planned_turn_multi_turn_history():
     assert interpreter.messages[2] == {"role": "user", "content": "Can you browse the web?"}
     assert interpreter.messages[3] == {"role": "assistant", "content": "Yes, I have web browsing tools!"}
 
+
+def test_resolve_path_user_folders():
+    from pathlib import Path
+    from scout.ai.tools import _resolve_path
+
+    home = Path.home()
+    assert _resolve_path("Downloads") == (home / "Downloads").resolve()
+    assert _resolve_path("~/Downloads") == (home / "Downloads").resolve()
+
+
+def test_tool_read_and_search_file(tmp_path):
+    from scout.ai.tools import tool_read_file, tool_search_file
+
+    html_file = tmp_path / "test_sheet.html"
+    html_content = """
+    <html>
+      <head>
+        <script>window.config = {a: 1};</script>
+        <style>body { color: red; }</style>
+      </head>
+      <body>
+        <table>
+          <tr><th>S NO</th><th>Course Name</th><th>SME</th><th>Date</th></tr>
+          <tr><td>207</td><td>Natural Resources Management</td><td>Prof. Sudip Mitra</td><td>Oct 17, 2026</td></tr>
+          <tr><td>208</td><td>Data Science</td><td>Prof. John Doe</td><td>Oct 18, 2026</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    html_file.write_text(html_content, encoding="utf-8")
+
+    # Test reading HTML strips scripts and styles
+    read_res = tool_read_file(str(html_file))
+    assert read_res.success
+    assert "window.config" not in read_res.message
+    assert "color: red" not in read_res.message
+    assert "Natural Resources Management" in read_res.message
+
+    # Test search_file with exact or keyword query
+    search_res = tool_search_file(str(html_file), "Natural Resource Management")
+    assert search_res.success
+    assert "Natural Resources Management" in search_res.message
+    assert "Prof. Sudip Mitra" in search_res.message
+    assert "Oct 17, 2026" in search_res.message
+
+

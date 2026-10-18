@@ -35,6 +35,14 @@ def _ask_cmd(args: list[str]) -> None:
     request = " ".join(args)
     from scout.ui.chat import print_user_message
     print_user_message(request)
+
+    # Natural task acknowledgment before execution begins
+    try:
+        from scout.ai.acknowledgment import acknowledge_task
+        acknowledge_task(request, voice_mode=False)
+    except Exception:
+        pass
+
     config = load_config()
     
     if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
@@ -353,15 +361,41 @@ def _handle_slash_command(cmd_line: str) -> bool:
                     console.print(f"\n[dim]TTS speed set to: {args[1]}[/dim]")
                 except ValueError:
                     console.print("\n[red]Invalid speed value. Must be a number.[/red]")
+            elif sub == "barge-in" and len(args) > 1:
+                val = args[1].lower() in ("on", "true", "1", "yes")
+                if "voice" not in config:
+                    config["voice"] = {}
+                config["voice"]["barge_in"] = val
+                save_config(config)
+                console.print(f"\n[dim]Voice barge-in (interruption) {'enabled' if val else 'disabled'}.[/dim]")
+            elif sub == "barge-in-threshold" and len(args) > 1:
+                try:
+                    t_val = float(args[1])
+                    if "voice" not in config:
+                        config["voice"] = {}
+                    config["voice"]["barge_in_threshold"] = t_val
+                    save_config(config)
+                    console.print(f"\n[dim]Voice barge-in threshold set to: {t_val}[/dim]")
+                except ValueError:
+                    console.print("\n[red]Invalid threshold value. Must be a number (e.g. 0.08).[/red]")
             else:
-                console.print("\n[red]Unknown voice command.[/red] Usage: /voice [on|off | stt-provider <p> | tts-profile <name> | tts-speed <val>]")
+                console.print("\n[red]Unknown voice command.[/red] Usage: /voice [on|off | stt-provider <p> | tts-profile <name> | tts-speed <val> | barge-in <on|off> | barge-in-threshold <val>]")
                 return False
+
+    elif cmd in ("/stop", "/silence", "/quiet"):
+        try:
+            from scout.voice.tts import stop_speaking
+            stop_speaking()
+            console.print("\n  [dim red]⏹ Speech stopped.[/dim red]")
+        except ImportError:
+            pass
 
     elif cmd == "/help":
         console.print("\n[bold]Scout Commands[/]")
         console.print("/quit, /exit, /q         Exit Scout")
         console.print("/clear                   Clear terminal")
         console.print("/new                     Start new chat")
+        console.print("/stop, /silence          Stop speech midsentence")
         console.print("/provider                Show configuration and API keys")
         console.print("/provider key <p>        Enter API key for a provider")
         console.print("/provider remove <p>     Remove stored key (or use 'all')")
@@ -381,6 +415,7 @@ def _handle_slash_command(cmd_line: str) -> bool:
         console.print("/voice stt-provider <p>  Set STT provider (groq | local)")
         console.print("/voice tts-profile <n>   Set TTS voice profile (e.g. af_bella)")
         console.print("/voice tts-speed <val>   Set TTS speech speed (e.g. 1.0)")
+        console.print("/voice barge-in <on|off> Toggle voice interruption during speech")
         console.print("/help                    Show commands\n")
 
     else:
@@ -439,6 +474,13 @@ def _chat_cmd(args: list[str]) -> None:
                 console.print("\n[dim]Chat session ended.[/dim]")
                 break
             
+            # Natural task acknowledgment before planning or execution begins
+            try:
+                from scout.ai.acknowledgment import acknowledge_task
+                acknowledge_task(req, voice_mode=_voice_mode)
+            except Exception:
+                pass
+
             config = load_config()
             if "planner" in config and config["planner"].get("provider") and "executor" in config and config["executor"].get("provider"):
                 from scout.ai import get_provider
@@ -463,7 +505,12 @@ def _chat_cmd(args: list[str]) -> None:
             else:
                 interpreter.chat_turn(req)
         except KeyboardInterrupt:
-            console.print("\n[yellow]Input cancelled.[/yellow]")
+            try:
+                from scout.voice.tts import stop_speaking
+                stop_speaking()
+            except ImportError:
+                pass
+            console.print("\n[yellow]Interrupted.[/yellow]")
             continue
         except EOFError:
             console.print("\n[dim]Chat session ended.[/dim]")

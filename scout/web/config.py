@@ -14,8 +14,8 @@ from scout.user_config import load_config
 @dataclass
 class WebConfig:
     # ── Search Configuration ──────────────────────────────────────────
-    # Provider: "duckduckgo", "tavily", "google", "brave"
-    search_provider: str = "duckduckgo"
+    # Provider: "auto", "duckduckgo", "bing", "tavily", "google", "brave"
+    search_provider: str = "auto"
     tavily_api_key: str = ""
     google_api_key: str = ""
     google_cse_id: str = ""

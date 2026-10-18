@@ -96,6 +96,19 @@ def print_scout_message(text: str) -> None:
     console.print()
 
 
+def print_scout_acknowledgment(text: str) -> None:
+    """Print Scout's brief task acknowledgment before planning and execution begins."""
+    if not text:
+        return
+    text = text.strip()
+    c_teal = THEME_COLORS["teal"]
+    c_cyan = THEME_COLORS["primary"]
+
+    console.print()
+    console.print(f"  [bold {c_teal}]SCOUT[/] [bold {c_cyan}]✦[/] [italic text]{escape(text)}[/]")
+    console.print()
+
+
 def print_scout_status(status: str, state: str = "idle") -> None:
     """Print compact, muted, visually secondary tool/progress activity."""
     c_cyan = THEME_COLORS["primary"]

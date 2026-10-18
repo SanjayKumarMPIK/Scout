@@ -5,9 +5,12 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from bs4 import BeautifulSoup
 
 @dataclass
 class StepResult:
@@ -303,49 +306,196 @@ def tool_close_window(title: str) -> StepResult:
     return StepResult(False, f"Failed to find or close window '{title}'.")
 
 
+def _resolve_path(path: str) -> Path:
+    """Expand user tildes, environment variables, and fallback to home directory for known folders."""
+    if not path or not str(path).strip():
+        return Path.cwd()
+    raw = str(path).strip().strip('"\'')
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    p = Path(expanded)
+    if not p.is_absolute():
+        resolved = (Path.cwd() / p).resolve()
+        if resolved.exists():
+            return resolved
+        home_candidate = (Path.home() / p).resolve()
+        if home_candidate.exists():
+            return home_candidate
+        return resolved
+    return p.resolve()
+
+
 @register_tool(
     name="list_files",
     description="List files in a directory.",
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the directory (default: current directory)"}
+            "path": {"type": "string", "description": "Path to the directory (e.g. 'Downloads', '~/Desktop', or '.')"}
         }
     }
 )
 def tool_list_files(path: str = ".") -> StepResult:
     try:
-        p = Path(path).resolve()
+        p = _resolve_path(path)
         if not p.is_dir():
-            return StepResult(False, f"{path} is not a directory")
+            return StepResult(False, f"{path} is not a directory (resolved: {p})")
         files = [f.name for f in p.iterdir()]
         return StepResult(True, f"Files in {p}: " + ", ".join(files))
     except Exception as e:
         return StepResult(False, str(e))
 
+
 @register_tool(
     name="read_file",
-    description="Read the contents of a text file.",
+    description="Read the contents of a text or HTML file. Automatically extracts clean readable text from HTML files and handles large files.",
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the file to read."}
+            "path": {"type": "string", "description": "Path to the file to read."},
+            "max_chars": {"type": "integer", "description": "Maximum characters to return (default: 50000)."},
+            "offset": {"type": "integer", "description": "Character offset to start reading from (default: 0)."}
         },
         "required": ["path"]
     }
 )
-def tool_read_file(path: str) -> StepResult:
+def tool_read_file(path: str, max_chars: int = 50000, offset: int = 0) -> StepResult:
     try:
-        p = Path(path).resolve()
+        p = _resolve_path(path)
         if not p.is_file():
-            return StepResult(False, f"File {path} does not exist.")
-        content = p.read_text(encoding="utf-8")
-        # Truncate if too long to save context
-        if len(content) > 2000:
-            content = content[:2000] + "... [TRUNCATED]"
+            return StepResult(False, f"File {path} does not exist (resolved: {p}).")
+        
+        raw_content = p.read_text(encoding="utf-8", errors="replace")
+        
+        # If HTML, clean scripts/styles/head to provide useful textual content
+        if p.suffix.lower() in (".html", ".htm") or "<html" in raw_content[:1000].lower():
+            try:
+                soup = BeautifulSoup(raw_content, "html.parser")
+                for s in soup(["script", "style", "head", "noscript", "svg"]):
+                    s.decompose()
+                clean_text = soup.get_text("\n", strip=True)
+                if clean_text:
+                    content = f"[HTML converted to clean text - {p.name}]\n" + clean_text
+                else:
+                    content = raw_content
+            except Exception:
+                content = raw_content
+        else:
+            content = raw_content
+
+        total_len = len(content)
+        if offset > 0:
+            content = content[offset:]
+        
+        if len(content) > max_chars:
+            content = (
+                content[:max_chars] 
+                + f"\n... [TRUNCATED - Showing {max_chars} chars from offset {offset}. Total length: {total_len} chars. Call read_file with offset={offset + max_chars} to read more.]"
+            )
         return StepResult(True, content)
     except Exception as e:
         return StepResult(False, str(e))
+
+
+@register_tool(
+    name="search_file",
+    description="Search for a text query or pattern inside a file (text, html, code, logs, csv) and retrieve matching lines, sections, or table rows with surrounding context.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the file to search in."},
+            "query": {"type": "string", "description": "The search term or phrase to look for."},
+            "context_chars": {"type": "integer", "description": "Characters of surrounding context to return around matches (default: 500)."}
+        },
+        "required": ["path", "query"]
+    }
+)
+def tool_search_file(path: str, query: str, context_chars: int = 500) -> StepResult:
+    try:
+        p = _resolve_path(path)
+        if not p.is_file():
+            return StepResult(False, f"File {path} does not exist (resolved: {p}).")
+        
+        raw_content = p.read_text(encoding="utf-8", errors="replace")
+        query_strip = query.strip()
+        query_lower = query_strip.lower()
+        query_words = [w.lower() for w in re.findall(r"\w+", query_strip) if len(w) > 2]
+
+        # 1. Check if it's an HTML file with tables
+        if p.suffix.lower() in (".html", ".htm") or "<table" in raw_content.lower():
+            try:
+                soup = BeautifulSoup(raw_content, "html.parser")
+                # Look for table header
+                headers = []
+                for tr in soup.find_all("tr"):
+                    texts = [td.get_text(strip=True) for td in tr.find_all(["th", "td"])]
+                    if any(h in " ".join(texts).lower() for h in ["course", "id", "name", "subject", "date", "title", "exam", "s no"]):
+                        headers = [t for t in texts if t and not t.isdigit()]
+                        if headers:
+                            break
+                
+                matched_rows = []
+                for tr in soup.find_all("tr"):
+                    row_text = tr.get_text(" ", strip=True)
+                    row_lower = row_text.lower()
+                    
+                    matched = False
+                    if query_lower in row_lower:
+                        matched = True
+                    elif query_words and all(w in row_lower for w in query_words):
+                        matched = True
+                    
+                    if matched:
+                        cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+                        if cells:
+                            matched_rows.append(cells)
+                
+                if matched_rows:
+                    output_lines = [f"Found {len(matched_rows)} matching table row(s) in {p.name}:"]
+                    for idx, row in enumerate(matched_rows[:15], 1):
+                        output_lines.append(f"\n--- Match {idx} ---")
+                        if headers and len(headers) == len(row):
+                            for h, val in zip(headers, row):
+                                output_lines.append(f"{h}: {val}")
+                        else:
+                            output_lines.append(" | ".join(row))
+                    return StepResult(True, "\n".join(output_lines))
+            except Exception:
+                pass  # Fall back to text search
+
+        # 2. General text / line search
+        lines = raw_content.splitlines()
+        matched_results = []
+        for line_num, line in enumerate(lines, 1):
+            line_lower = line.lower()
+            matched = False
+            if query_lower in line_lower:
+                matched = True
+            elif query_words and all(w in line_lower for w in query_words):
+                matched = True
+            
+            if matched:
+                if len(line) > 1000:
+                    idx = line_lower.find(query_words[0] if query_words else query_lower)
+                    if idx == -1:
+                        idx = 0
+                    snippet = line[max(0, idx - 200) : min(len(line), idx + 400)]
+                    matched_results.append(f"Line {line_num} (snippet): {snippet}")
+                else:
+                    start_ctx = max(0, line_num - 2)
+                    end_ctx = min(len(lines), line_num + 2)
+                    ctx = "\n".join(f"  {lines[i]}" for i in range(start_ctx, end_ctx))
+                    matched_results.append(f"Line {line_num}:\n{ctx}")
+                
+                if len(matched_results) >= 10:
+                    break
+
+        if matched_results:
+            return StepResult(True, f"Found {len(matched_results)} match(es) in {p.name}:\n\n" + "\n\n".join(matched_results))
+        
+        return StepResult(False, f"No matches found for '{query}' in {p.name}.")
+    except Exception as e:
+        return StepResult(False, str(e))
+
 
 @register_tool(
     name="write_file",
@@ -361,11 +511,12 @@ def tool_read_file(path: str) -> StepResult:
 )
 def tool_write_file(path: str, content: str) -> StepResult:
     try:
-        p = Path(path).resolve()
+        p = _resolve_path(path)
         p.write_text(content, encoding="utf-8")
         return StepResult(True, f"Successfully wrote to {p}")
     except Exception as e:
         return StepResult(False, str(e))
+
 
 @register_tool(
     name="create_directory",
@@ -380,7 +531,7 @@ def tool_write_file(path: str, content: str) -> StepResult:
 )
 def tool_create_directory(path: str) -> StepResult:
     try:
-        p = Path(path).resolve()
+        p = _resolve_path(path)
         p.mkdir(parents=True, exist_ok=True)
         return StepResult(True, f"Directory created: {p}")
     except Exception as e:
@@ -505,6 +656,89 @@ def tool_analyze_screen(prompt: str) -> StepResult:
         return StepResult(False, f"Vision analysis failed: {res.get('observation')}")
         
     return StepResult(True, res.get("observation", "No observation provided."))
+
+
+@register_tool(
+    name="ocr_read_screen",
+    description="Capture the screen and extract all visible text and UI element positions using fast, zero-latency, offline Windows OCR. Use this to read on-screen text, inspect dialogs, or verify visible UI state without cloud vision costs.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "image_path": {
+                "type": "string",
+                "description": "Optional path to a specific image file to read. If omitted, captures the live screen."
+            }
+        }
+    }
+)
+def tool_ocr_read_screen(image_path: str = "") -> StepResult:
+    from scout.vision.ocr import ocr_image, ocr_screen
+
+    if image_path and image_path.strip():
+        result = ocr_image(image_path)
+    else:
+        result = ocr_screen()
+
+    if not result.success:
+        return StepResult(False, f"Windows OCR failed: {result.error}")
+
+    return StepResult(True, result.to_formatted_text())
+
+
+@register_tool(
+    name="ocr_find_element",
+    description="Locate a specific button, label, link, or text element on screen using native Windows OCR. Returns exact center coordinates (X, Y) and bounding box so you can immediately click or interact with it using the computer tool.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "The exact or partial text of the button or UI element to find (e.g. 'Submit', 'Login', 'Cancel', 'Save', 'Next')."
+            },
+            "image_path": {
+                "type": "string",
+                "description": "Optional path to a specific image file to inspect. If omitted, captures the live screen."
+            }
+        },
+        "required": ["text"]
+    }
+)
+def tool_ocr_find_element(text: str, image_path: str = "") -> StepResult:
+    from scout.vision.ocr import ocr_image, ocr_screen
+
+    if not text or not text.strip():
+        return StepResult(False, "No target text provided to find.")
+
+    if image_path and image_path.strip():
+        result = ocr_image(image_path)
+    else:
+        result = ocr_screen()
+
+    if not result.success:
+        return StepResult(False, f"Windows OCR failed: {result.error}")
+
+    match = result.find_element(text)
+    if not match:
+        preview = [f"'{l.text}'" for l in result.lines[:8]]
+        preview_text = ", ".join(preview) if preview else "no text detected"
+        return StepResult(
+            False,
+            f"Element '{text}' was not found on screen. Visible text elements include: {preview_text}."
+        )
+
+    cx = match["center_x"]
+    cy = match["center_y"]
+    rect = match["rect"]
+    matched_text = match["text"]
+    match_type = match["type"]
+
+    msg = (
+        f"Found '{matched_text}' ({match_type}) on screen at center coordinates: ({cx}, {cy}).\n"
+        f"Bounding box: x={rect['x']}, y={rect['y']}, width={rect['width']}, height={rect['height']}.\n"
+        f"To click this element, use: computer(action='click', x={cx}, y={cy})."
+    )
+    return StepResult(True, msg)
+
 
 # -- Unified Computer Tool --
 

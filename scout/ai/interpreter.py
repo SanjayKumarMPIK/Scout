@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -19,10 +20,11 @@ console = Console()
 
 SAFE = {
     "computer", "list_windows", "get_active_window", "find_window", "minimize_window",
-    "maximize_window", "list_files", "read_file", "system_info", "project_info",
+    "maximize_window", "list_files", "read_file", "search_file", "system_info", "project_info",
     "git_status", "git_log", "git_branch", "open_application", "open_url",
     "project_open", "complete_task", "verify_screen", "analyze_screen",
     "web_search", "fetch_webpage", "browser_navigate", "browser_extract", "browser_close",
+    "ocr_read_screen", "ocr_find_element",
 }
 CONFIRM = {
     "close_window", "run_command", "project_run", "git_pull", "git_commit",
@@ -37,7 +39,17 @@ def _get_risk_level(action_type: str) -> str:
         return "HIGH_RISK"
     return "CONFIRM"
 
-SYSTEM_PROMPT = """You are Scout, a VERY FRIENDLY AND CHILL Windows computer automation agent.
+_USER_HOME = Path.home()
+_SYSTEM_PATHS_DESC = f"""# Standard Windows User Paths
+- User Profile: {_USER_HOME}
+- Downloads Folder: {_USER_HOME / 'Downloads'}
+- Desktop Folder: {_USER_HOME / 'Desktop'}
+- Documents Folder: {_USER_HOME / 'Documents'}
+Always use these real paths when referencing user folders (Downloads, Desktop, Documents). Never guess usernames.
+"""
+
+SYSTEM_PROMPT = _SYSTEM_PATHS_DESC + """
+You are Scout, a VERY FRIENDLY AND CHILL Windows computer automation agent.
 You have access to a set of tools to control the computer, read files, and execute commands.
 Your objective is to fulfill the user's request.
 
@@ -226,6 +238,10 @@ class AIInterpreter:
         elif func_name in ("write_file", "read_file", "create_directory"):
             path = str(args.get("path") or "").strip()
             return (f"{func_name} › {path}" if path else func_name, path)
+        elif func_name == "search_file":
+            path = str(args.get("path") or "").strip()
+            query = str(args.get("query") or "").strip()
+            return (f"search_file › {path} for '{query}'" if path else func_name, f"{path} ('{query}')")
         elif func_name == "open_application":
             app = str(args.get("name") or args.get("path") or "").strip()
             return (f"open_application › {app}" if app else func_name, app)
@@ -250,6 +266,13 @@ class AIInterpreter:
             prompt = str(args.get("prompt") or "").strip()
             trunc = f"{prompt[:40]}..." if len(prompt) > 40 else prompt
             return (f"{func_name} › {trunc}" if prompt else func_name, prompt)
+        elif func_name == "ocr_find_element":
+            target = str(args.get("text") or "")
+            return (f"ocr_find_element › '{target[:30]}'", target)
+        elif func_name == "ocr_read_screen":
+            img = str(args.get("image_path") or "")
+            detail = f"image: {Path(img).name}" if img else "live screen"
+            return (f"ocr_read_screen › {detail}", detail)
         elif func_name == "web_search":
             queries = args.get("queries") or args.get("query") or ""
             q_text = ", ".join(queries) if isinstance(queries, list) else str(queries)
@@ -290,7 +313,7 @@ class AIInterpreter:
         summary, detail = self._format_action_summary(func_name, args)
 
         from scout.ui.chat import print_scout_status
-        tool_state = "verifying" if func_name in ("verify_screen", "analyze_screen") else "executing"
+        tool_state = "verifying" if func_name in ("verify_screen", "analyze_screen", "ocr_read_screen", "ocr_find_element") else "executing"
         print_scout_status(f"Running {summary}...", tool_state)
 
         # Check safety

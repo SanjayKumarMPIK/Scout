@@ -6,6 +6,7 @@ from scout.ui.header import build_header, build_identity_block, print_persistent
 from scout.ui.chat import (
     print_user_message,
     print_scout_message,
+    print_scout_acknowledgment,
     print_scout_status,
     print_command_output,
     print_scout_error,
@@ -28,6 +29,7 @@ __all__ = [
     "print_persistent_header",
     "print_user_message",
     "print_scout_message",
+    "print_scout_acknowledgment",
     "print_scout_status",
     "print_scout_error",
     "print_plan_overview",

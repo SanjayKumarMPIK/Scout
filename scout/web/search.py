@@ -1,7 +1,9 @@
 """Web search provider integration for Scout.
 
 Supports multiple configurable providers:
+- auto: Intelligent automatic fallback (DuckDuckGo -> Bing).
 - duckduckgo: Zero-config, free, no API key required.
+- bing: Zero-config, free, resilient direct HTML search.
 - tavily: AI-optimized search API (requires TAVILY_API_KEY).
 - google: Google Custom Search JSON API (requires GOOGLE_API_KEY and GOOGLE_CSE_ID).
 - brave: Brave Search API (requires BRAVE_API_KEY).
@@ -9,6 +11,7 @@ Supports multiple configurable providers:
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -74,6 +77,12 @@ class DuckDuckGoProvider:
         try:
             with httpx.Client(timeout=timeout, follow_redirects=True) as client:
                 resp = client.post(self.LITE_URL, data=data, headers=headers)
+                if (
+                    resp.status_code == 202
+                    or "challenge" in resp.text.lower()
+                    or "bots use duckduckgo" in resp.text.lower()
+                ):
+                    raise SearchProviderError("DuckDuckGo rate limit or anti-bot challenge encountered.")
                 resp.raise_for_status()
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -98,7 +107,6 @@ class DuckDuckGoProvider:
 
                 snippet_td = tr.select_one("td.result-snippet")
                 if snippet_td and current_link:
-
                     raw_snippet = snippet_td.get_text(strip=True)
                     pub_date, clean_snippet = _extract_date_from_snippet(raw_snippet)
                     # Filter out sponsored ads or tracking redirects
@@ -118,10 +126,86 @@ class DuckDuckGoProvider:
                     if len(results) >= max_results:
                         break
 
+            return results
+        except SearchProviderError:
+            raise
+        except Exception as exc:
+            raise SearchProviderError(f"DuckDuckGo search failed: {exc}") from exc
+
+
+class BingProvider:
+    """Bing search provider requiring no API key."""
+
+    SEARCH_URL = "https://www.bing.com/search"
+
+    def search(self, query: str, max_results: int = 6, timeout: float = 12.0) -> list[SearchResult]:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        params = {"q": query}
+        results: list[SearchResult] = []
+        try:
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                resp = client.get(self.SEARCH_URL, params=params, headers=headers)
+                resp.raise_for_status()
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for li in soup.select("li.b_algo"):
+                h2 = li.select_one("h2 a")
+                if not h2:
+                    continue
+                raw_title = h2.get_text(strip=True)
+                title = re.sub(r"[\u200e\u200f]", "", raw_title).strip()
+                raw_href = h2.get("href", "")
+                url = self._decode_bing_url(raw_href)
+
+                if not url or not url.startswith("http") or "bing.com/search" in url:
+                    continue
+
+                snippet_elem = (
+                    li.select_one("p.b_algoSlug")
+                    or li.select_one("div.b_snippet")
+                    or li.select_one(".b_caption p")
+                    or li.select_one("p")
+                )
+                raw_snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                clean_snippet_text = re.sub(r"[\u200e\u200f]", "", raw_snippet).strip()
+                pub_date, clean_snippet = _extract_date_from_snippet(clean_snippet_text)
+
+                results.append(
+                    SearchResult(
+                        title=title,
+                        url=url,
+                        snippet=clean_snippet,
+                        published_date=pub_date,
+                        query=query,
+                    )
+                )
+                if len(results) >= max_results:
+                    break
 
             return results
         except Exception as exc:
-            raise SearchProviderError(f"DuckDuckGo search failed: {exc}") from exc
+            raise SearchProviderError(f"Bing search failed: {exc}") from exc
+
+    @staticmethod
+    def _decode_bing_url(raw_href: str) -> str:
+        """Decode Bing redirect URL (/ck/a? ... u=a1<base64>) to target URL."""
+        if "/ck/a?" in raw_href and "u=a1" in raw_href:
+            try:
+                token = raw_href.split("u=a1")[1].split("&")[0]
+                padded = token + "=" * (-len(token) % 4)
+                decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="ignore")
+                if decoded.startswith("http"):
+                    return decoded
+            except Exception:
+                pass
+        return raw_href
 
 
 class TavilyProvider:
@@ -272,6 +356,11 @@ def get_search_provider(config: WebConfig | None = None) -> Any:
         return GoogleCSEProvider(cfg.google_api_key, cfg.google_cse_id)
     if provider_name == "brave":
         return BraveProvider(cfg.brave_api_key)
+    if provider_name == "bing":
+        return BingProvider()
+    if provider_name == "duckduckgo":
+        return DuckDuckGoProvider()
+    # Default "auto": start with DuckDuckGo, search_web will automatically fall back to Bing
     return DuckDuckGoProvider()
 
 
@@ -282,6 +371,9 @@ def search_web(
 ) -> list[SearchResult]:
     """Execute a web search across one or more queries and return unified, deduplicated results.
 
+    Supports automatic multi-engine fallback (DuckDuckGo -> Bing) if rate limits,
+    bot challenges, or zero results are encountered.
+
     Args:
         queries: Single query string or list of query strings.
         max_results: Maximum results to return per query or in total.
@@ -291,7 +383,7 @@ def search_web(
         List of SearchResult objects with title, url, snippet, published_date.
     """
     cfg = config or get_web_config()
-    provider = get_search_provider(cfg)
+    primary_provider = get_search_provider(cfg)
 
     query_list = [queries] if isinstance(queries, str) else list(queries)
     query_list = [q.strip() for q in query_list if q and q.strip()]
@@ -304,19 +396,45 @@ def search_web(
     all_results: list[SearchResult] = []
     seen_urls: set[str] = set()
 
+    # Determine fallback provider
+    fallback_provider = BingProvider() if not isinstance(primary_provider, BingProvider) else DuckDuckGoProvider()
+
     for q in query_list:
+        results: list[SearchResult] = []
+        used_fallback = False
         try:
-            results = provider.search(q, max_results=max_results, timeout=cfg.request_timeout)
-            for res in results:
-                # Normalize URL for deduplication
-                norm_url = res.url.rstrip("/")
-                if norm_url not in seen_urls:
-                    seen_urls.add(norm_url)
-                    all_results.append(res)
-        except SearchProviderError:
-            raise
+            results = primary_provider.search(q, max_results=max_results, timeout=cfg.request_timeout)
+        except SearchProviderError as exc:
+            log_web_event(f"Primary search provider issue ({exc}). Trying fallback engine...", "warning")
+            try:
+                results = fallback_provider.search(q, max_results=max_results, timeout=cfg.request_timeout)
+                used_fallback = True
+            except Exception as fb_exc:
+                raise SearchProviderError(f"Search failed for '{q}': {exc}; fallback error: {fb_exc}") from exc
         except Exception as exc:
-            raise SearchProviderError(f"Search failed for query '{q}': {exc}") from exc
+            log_web_event(f"Search error ({exc}). Trying fallback engine...", "warning")
+            try:
+                results = fallback_provider.search(q, max_results=max_results, timeout=cfg.request_timeout)
+                used_fallback = True
+            except Exception as fb_exc:
+                raise SearchProviderError(f"Search failed for '{q}': {exc}; fallback error: {fb_exc}") from exc
+
+        # If primary returned 0 results (e.g. DDG stealth challenge or empty index), try fallback
+        if not results and not used_fallback:
+            try:
+                fb_results = fallback_provider.search(q, max_results=max_results, timeout=cfg.request_timeout)
+                if fb_results:
+                    log_web_event(f"Fallback engine retrieved {len(fb_results)} results for '{q}'.", "info")
+                    results = fb_results
+            except Exception:
+                pass
+
+        for res in results:
+            # Normalize URL for deduplication
+            norm_url = res.url.rstrip("/")
+            if norm_url not in seen_urls:
+                seen_urls.add(norm_url)
+                all_results.append(res)
 
     log_web_event(f"Found {len(all_results)} relevant sources across queries.", "success")
     return all_results

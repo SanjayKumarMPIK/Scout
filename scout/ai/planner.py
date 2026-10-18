@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from rich.console import Console
 from rich.markup import escape
@@ -53,6 +54,9 @@ YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVEL
 3. Always plan strictly for the user's LATEST message in the current turn.
 4. If a previous turn performed an action (such as a speedtest or git commit), and the user now asks a capability question (like "Can you browse the web?"), answer the question directly with mode="respond". DO NOT run the previous task again!
 
+# System Paths & User Folders
+{system_paths}
+
 # Executor tools (exact names and parameters)
 {tool_reference}
 
@@ -73,6 +77,13 @@ YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVEL
    - Always include source titles and clickable markdown URLs in your final answers.
    - Never claim to have visited a page or verified a fact unless actually executed by the tools.
 
+3. GRANULAR DATA & LISTING RETRIEVAL (Stipends, Salaries, Specs, Pricing):
+   - When the user asks for specific listings, data points, or granular figures (e.g. internship/job stipend amounts, salaries, exact pricing, structured tables, or requirements):
+     * Search engine snippets alone rarely contain complete figures or details.
+     * Plan a multi-step workflow:
+       Step 1: Use `web_search` with targeted queries to identify candidate portals, aggregators, or direct listings.
+       Step 2: Use `fetch_webpage` on the top candidate URLs to inspect the page contents and extract the exact details (e.g. stipend, duration, requirements).
+
 - MOBILE DEVICE AUTOMATION: You CAN control connected Android devices using `adb` via the `run_command` tool. Formulate the exact `adb` commands yourself (e.g., `adb shell input tap x y`, `adb shell am start ...`). Do NOT ask the user for the exact commands and DO NOT say you cannot control a phone.
 
 
@@ -85,9 +96,11 @@ YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVEL
    outcome matters for later steps.
 5. Use facts already present in the memory/context instead of planning steps to look them up.
 6. Windows only: run_command executes PowerShell, so use PowerShell syntax.
-7. Prefer headless tools (run_command, read_file, write_file) over UI automation for files and data.
-8. Keep the plan minimal: the fewest steps that reliably achieve the goal.
-9. DANGEROUS ACTION PREVENTION: To "read", "check", or "verify" what is on the screen or inside an application, you MUST use `verify_screen` or `analyze_screen`. NEVER use keyboard/mouse actions (e.g. `Ctrl+A`, `Delete`, `Ctrl+C`) to try and read or extract information. Never plan destructive actions just to test the state of an application.
+7. Prefer headless tools (run_command, read_file, search_file, write_file) over UI automation for files and data. When looking for specific information, keywords, or rows inside files (text, HTML, logs, CSV), use `search_file` rather than reading the entire file. When referring to user folders, use the exact system paths provided above (e.g. Downloads, Desktop, Documents).
+9. DANGEROUS ACTION PREVENTION & UI INSPECTION:
+   - To read on-screen text, dialog messages, or locate UI buttons, prefer `ocr_read_screen` or `ocr_find_element`. It runs instantly, offline, and gives exact coordinates to click without cloud vision costs.
+   - To inspect complex visual appearance (colors, charts, visual layout), use `verify_screen` or `analyze_screen`.
+   - NEVER use destructive keyboard/mouse actions (e.g. `Ctrl+A`, `Delete`, `Ctrl+C`) to try and read or extract information from an application. Never plan destructive actions just to test the state of an application.
 
 # STRICT Automation Policy
 - For actionable requests and commands, ALWAYS try to automate them rather than telling the user to do something manually.
@@ -221,7 +234,15 @@ class Planner:
 
         mem_block = get_memory_store().get_relevant_memories(memory_query)
 
-        system_prompt = PLANNER_PROMPT.replace("{tool_reference}", _build_tool_reference())
+        user_home = Path.home()
+        system_paths = (
+            f"- User Profile: {user_home}\n"
+            f"- Downloads Folder: {user_home / 'Downloads'}\n"
+            f"- Desktop Folder: {user_home / 'Desktop'}\n"
+            f"- Documents Folder: {user_home / 'Documents'}\n"
+            "ALWAYS use these exact paths when the user asks for files in Downloads, Desktop, or Documents. NEVER guess usernames."
+        )
+        system_prompt = PLANNER_PROMPT.replace("{tool_reference}", _build_tool_reference()).replace("{system_paths}", system_paths)
         if memory_context:
             system_prompt += f"\n\n# User Profile & Preferences\n{memory_context}"
 
