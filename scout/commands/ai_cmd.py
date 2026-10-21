@@ -382,13 +382,60 @@ def _handle_slash_command(cmd_line: str) -> bool:
                 console.print("\n[red]Unknown voice command.[/red] Usage: /voice [on|off | stt-provider <p> | tts-profile <name> | tts-speed <val> | barge-in <on|off> | barge-in-threshold <val>]")
                 return False
 
-    elif cmd in ("/stop", "/silence", "/quiet"):
-        try:
-            from scout.voice.tts import stop_speaking
-            stop_speaking()
-            console.print("\n  [dim red]⏹ Speech stopped.[/dim red]")
-        except ImportError:
-            pass
+    elif cmd == "/email":
+        from scout.mail.client import (
+            get_email_credentials,
+            save_email_credentials,
+            clear_email_credentials,
+            test_connection,
+        )
+        if not args:
+            addr, pwd = get_email_credentials()
+            if addr and pwd:
+                console.print(f"\n[bold cyan]Email Account:[/] [green]Configured[/] ({addr})")
+                console.print("[dim]Type '/email test' to test connection, or '/email clear' to remove.[/dim]\n")
+            else:
+                console.print("\n[bold cyan]Email Account:[/] [yellow]Not configured[/]")
+                console.print("[dim]Type '/email setup' to configure your Gmail address and Google App Password.[/dim]\n")
+            return False
+
+        sub = args[0].lower()
+        if sub == "setup":
+            from scout.core.auth import prompt_secret
+            console.print("\n[bold cyan]Gmail Account Setup[/]")
+            console.print("[dim]To allow Scout to read your emails, create a 16-character App Password at:[/dim]")
+            console.print("[dim cyan]https://myaccount.google.com/apppasswords[/dim cyan]")
+            console.print("[dim](Requires 2-Step Verification enabled on your Google Account)[/dim]\n")
+            
+            addr = prompt_secret("Enter your Gmail address: ").strip()
+            if not addr:
+                console.print("[yellow]Setup cancelled.[/yellow]\n")
+                return False
+            pwd = prompt_secret("Enter your 16-character Google App Password: ").strip()
+            if not pwd:
+                console.print("[yellow]Setup cancelled.[/yellow]\n")
+                return False
+
+            save_email_credentials(addr, pwd)
+            console.print(f"\n[green]Credentials saved for {addr}.[/green]")
+            console.print("[dim]Testing connection...[/dim]")
+            ok, msg = test_connection()
+            if ok:
+                console.print(f"[bold green]Connected successfully![/] {msg}\n")
+            else:
+                console.print(f"[bold yellow]Connection test warning:[/] {msg}\n")
+        elif sub == "test":
+            console.print("\n[dim]Testing Gmail connection...[/dim]")
+            ok, msg = test_connection()
+            if ok:
+                console.print(f"[bold green]Status: Connected[/] ({msg})\n")
+            else:
+                console.print(f"[bold red]Status: Failed[/] ({msg})\n")
+        elif sub in ("clear", "remove", "delete"):
+            clear_email_credentials()
+            console.print("\n[dim]Email credentials removed.[/dim]\n")
+        else:
+            console.print("\n[red]Unknown email command.[/red] Usage: /email [setup | test | clear]\n")
 
     elif cmd == "/help":
         console.print("\n[bold]Scout Commands[/]")
@@ -416,6 +463,10 @@ def _handle_slash_command(cmd_line: str) -> bool:
         console.print("/voice tts-profile <n>   Set TTS voice profile (e.g. af_bella)")
         console.print("/voice tts-speed <val>   Set TTS speech speed (e.g. 1.0)")
         console.print("/voice barge-in <on|off> Toggle voice interruption during speech")
+        console.print("/email                   Show email status")
+        console.print("/email setup             Configure Gmail address and App Password")
+        console.print("/email test              Test Gmail IMAP connection")
+        console.print("/email clear             Remove email credentials")
         console.print("/help                    Show commands\n")
 
     else:

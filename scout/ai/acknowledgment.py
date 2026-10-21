@@ -88,7 +88,8 @@ _RE_GENERAL_KNOWLEDGE = re.compile(
 # Computer / Tool triggers that turn a question into an actionable query
 _RE_TOOL_TRIGGERS = re.compile(
     r"\b(screen|screenshot|ocr|file|files|folder|download|downloads|desktop|documents|"
-    r"browser|search|google|look up|speed|battery|git|window|app|application|program|code|script|terminal)\b",
+    r"browser|search|google|look up|speed|battery|git|window|app|application|program|code|script|terminal|"
+    r"email|emails|gmail|inbox|mailbox|phone|android|mobile|adb)\b",
     re.IGNORECASE,
 )
 
@@ -145,7 +146,7 @@ def is_actionable_task(text: str) -> bool:
         "remove ", "copy ", "move ", "rename ", "save ", "type ", "press ", "click ",
         "scroll ", "take a screenshot", "capture screen", "check ", "inspect ", "examine ",
         "test ", "verify ", "run ", "execute ", "commit ", "push ", "pull ", "clone ",
-        "install ", "download ",
+        "install ", "download ", "lock ", "unlock ", "turn on ", "turn off ",
     )
     if any(core_low.startswith(p) for p in action_start_prefixes):
         return True
@@ -159,6 +160,8 @@ def is_actionable_task(text: str) -> bool:
         "git status", "git commit", "git push", "git pull", "git diff", "git log", "git branch",
         "run command", "run terminal", "run pytest", "run script",
         "files in", "folder", "downloads folder", "desktop folder", "documents folder",
+        "read my emails", "read emails", "check my emails", "check emails", "check my inbox", "check inbox", "search emails", "latest emails",
+        "from my phone", "from phone", "using my phone", "using phone", "on my phone", "on phone", "with my phone", "with phone", "check my phone",
     )
     if any(kw in low for kw in action_keywords):
         return True
@@ -227,7 +230,25 @@ def generate_acknowledgment(text: str) -> Optional[str]:
             ]
             return _get_variation(templates)
 
-    # 3. Web Search / Research / Look up
+    # 3. Email / Inbox Operations
+    if re.search(r"\b(emails?|gmail|inbox|mailbox)\b", cleaned_low):
+        templates = [
+            "Sure, I'll check your emails for you.",
+            "Got it. Looking through your emails now.",
+            "Understood, checking your inbox for you.",
+        ]
+        return _get_variation(templates)
+
+    # 4. Phone / Mobile / ADB Operations
+    if re.search(r"\b(phone|android|mobile|adb)\b", cleaned_low) or "from my phone" in cleaned_low or "using my phone" in cleaned_low:
+        templates = [
+            "Sure, I'll handle that on your phone using ADB for you.",
+            "Got it. Connecting to your phone via ADB now.",
+            "Understood, executing that on your phone for you.",
+        ]
+        return _get_variation(templates)
+
+    # 5. Web Search / Research / Look up
     if re.search(r"\b(search|look\s+up|google|research|browse|fetch|find\s+information)\b", cleaned_low):
         templates = [
             "Sure, I'll look that up for you.",
@@ -269,7 +290,7 @@ def generate_acknowledgment(text: str) -> Optional[str]:
         templates = [
             "Got it, running that for you.",
             "Sure, I'll execute that for you.",
-            "Understood, taking care of that now.",
+            "Understood, I'll take care of running that for you.",
         ]
         return _get_variation(templates)
 

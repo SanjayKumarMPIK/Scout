@@ -116,9 +116,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         number = len(history) + 1
         total = number + len(queue)
 
-        from scout.ui.theme import scout_theme
-        c = Console(theme=scout_theme)
-        c.print(f"\n[bold primary]⬡ Step {number}/{total}[/] [text]{escape(step.description)}[/]")
+        console.print(f"\n[dim]⬡ Step {number}/{total} {escape(step.description)}[/dim]")
         
         outcome: StepOutcome = interpreter.run_step(number, total, step.description, step.tools, history=history)
         history.append((step, outcome.status, outcome.result))
@@ -129,16 +127,16 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
             continue
 
         if outcome.status == "cancelled":
-            console.print(f"[yellow]■ Plan stopped at step {number}: {escape(outcome.result)}[/]")
+            console.print(f"  [dim]■ Plan stopped at step {number}: {escape(outcome.result)}[/dim]")
             interpreter.messages = chat_history + [
                 {"role": "user", "content": request},
                 {"role": "assistant", "content": f"Plan stopped at step {number}: {outcome.result}"},
             ]
             return
 
-        console.print(f"[red]✗ Step {number} failed:[/] {escape(outcome.result)}")
+        console.print(f"  [dim]✗ Step {number} failed: {escape(outcome.result)}[/dim]")
         if replans >= MAX_REPLANS:
-            console.print("[dim]Revision limit reached; stopping the plan.[/dim]")
+            console.print("  [dim]Revision limit reached; stopping the plan.[/dim]")
             break
 
         replans += 1
@@ -159,10 +157,10 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
                 "Was the user's original request fully completed? If yes, use mode='respond' to finalize. "
                 "If no, or if new issues arose that need fixing, use mode='execute' and generate the remaining steps."
             )
-            with console.status("[bold cyan]Checking if goal was met...[/]"):
+            with console.status("[dim]Checking if goal was met...[/dim]"):
                 check_plan = planner.generate_plan(check_prompt, chat_history=chat_history)
             if check_plan and check_plan.mode == "execute" and check_plan.steps:
-                console.print("[yellow]Planner determined goal is not fully met. Adding remaining steps...[/yellow]")
+                console.print("  [dim]Planner determined goal is not fully met. Adding remaining steps...[/dim]")
                 _show_plan(check_plan.steps, "Additional Steps (Goal Verification)", start=len(history) + 1)
                 queue = list(check_plan.steps)
                 replans += 1

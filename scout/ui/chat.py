@@ -110,50 +110,35 @@ def print_scout_acknowledgment(text: str) -> None:
 
 
 def print_scout_status(status: str, state: str = "idle") -> None:
-    """Print compact, muted, visually secondary tool/progress activity."""
-    c_cyan = THEME_COLORS["primary"]
-    c_ice = THEME_COLORS["ice"]
-    c_mint = THEME_COLORS["success"]
-    c_coral = THEME_COLORS["error"]
-    c_dim = THEME_COLORS["dim"]
-
+    """Print faded, non-distracting tool/progress activity."""
     state_lower = state.lower()
     if state_lower == "executing":
-        icon = f"[{c_cyan}]⬡[/{c_cyan}]"
-        label = f"[{c_dim}]executing[/{c_dim}]"
-        detail = f"[{c_ice}]{escape(status)}[/{c_ice}]"
+        icon = "⬡"
+        label = "executing"
     elif state_lower == "verifying":
-        icon = f"[{c_ice}]◎[/{c_ice}]"
-        label = f"[{c_cyan}]verifying[/{c_cyan}]"
-        detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
+        icon = "◎"
+        label = "verifying"
     elif state_lower == "success":
-        icon = f"[{c_mint}]⬢[/{c_mint}]"
-        label = f"[{c_mint}]completed[/{c_mint}]"
-        detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
+        icon = "⬢"
+        label = "completed"
     elif state_lower == "error":
-        icon = f"[{c_coral}]▲[/{c_coral}]"
-        label = f"[{c_coral}]failed[/{c_coral}]"
-        detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
+        icon = "▲"
+        label = "failed"
     elif state_lower == "listening":
-        icon = f"[{c_ice}]⬡[/{c_ice}]"
-        label = f"[{c_ice}]listening[/{c_ice}]"
-        detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
+        icon = "⬡"
+        label = "listening"
     else:
-        icon = f"[{c_dim}]⬡[/{c_dim}]"
-        label = f"[{c_dim}]info[/{c_dim}]"
-        detail = f"[{c_dim}]{escape(status)}[/{c_dim}]"
+        icon = "⬡"
+        label = "info"
 
-    console.print(f"    [{c_dim}]╺━━[/{c_dim}] {icon} {label} {detail}")
+    console.print(f"    [dim]╺━━ {icon} {label} {escape(status)}[/dim]")
 
 
 def print_command_output(command: str, output: str, max_lines: int = 12) -> None:
-    """Display command execution output so the user can verify what happened."""
+    """Display faded command execution output so it does not distract."""
     if not output or not output.strip():
         return
-    c_dim = THEME_COLORS["dim"]
     c_border = THEME_COLORS["border"]
-    c_text = THEME_COLORS["text_muted"]
-    c_ice = THEME_COLORS["ice"]
 
     text = output.strip()
     if text.startswith("Command completed (exit 0)\n"):
@@ -167,34 +152,27 @@ def print_command_output(command: str, output: str, max_lines: int = 12) -> None
     lines = text.split("\n")
     display_lines = lines[:max_lines]
 
-    cmd_label = f"[{c_ice}]{escape(command)}[/{c_ice}]" if command else "output"
+    cmd_label = escape(command) if command else "output"
     console.print(f"    [{c_border}]┌─ output ({cmd_label}) ────────────────────────[/{c_border}]")
     for line in display_lines:
-        console.print(f"    [{c_border}]│[/{c_border}] [{c_text}]{escape(line)}[/{c_text}]")
+        console.print(f"    [{c_border}]│[/{c_border}] [dim]{escape(line)}[/dim]")
     if len(lines) > max_lines:
-        console.print(f"    [{c_border}]│[/{c_border}] [{c_dim}]... ({len(lines) - max_lines} more lines)[/{c_dim}]")
+        console.print(f"    [{c_border}]│[/{c_border}] [dim]... ({len(lines) - max_lines} more lines)[/dim]")
     console.print(f"    [{c_border}]└─────────────────────────────────────────────────[/{c_border}]")
 
 
 def print_scout_error(error: str) -> None:
-    """Print a distinct but restrained error line without large bulky panels."""
-    c_coral = THEME_COLORS["error"]
-    console.print()
-    console.print(f"  [bold {c_coral}]▲ SYSTEM ERROR:[/] [{c_coral}]{escape(error)}[/{c_coral}]")
-    console.print()
+    """Print a faded intermediate error line so it does not distract."""
+    console.print(f"  [dim]▲ SYSTEM ERROR: {escape(error)}[/dim]")
 
 
 def print_plan_overview(steps: list[str], title: str = "Execution Plan") -> None:
-    """Display an execution plan with clean hierarchy and subtle dividers."""
-    c_cyan = THEME_COLORS["primary"]
-    c_ice = THEME_COLORS["ice"]
-    c_border = THEME_COLORS["border"]
-
+    """Display an execution plan with clean, faded styling so it does not distract."""
     console.print()
-    console.print(f"  [bold {c_cyan}]⬡ {title.upper()}[/]  [{c_border}]" + "─" * 45 + f"[/{c_border}]")
+    console.print(f"  [dim]⬡ {title.upper()}  " + "─" * 45 + "[/dim]")
     for i, step in enumerate(steps, 1):
-        console.print(f"    [{c_cyan}]{i}.[/{c_cyan}] [{c_ice}]{escape(step)}[/{c_ice}]")
-    console.print(f"  [{c_border}]" + "─" * (len(title) + 50) + f"[/{c_border}]")
+        console.print(f"    [dim]{i}. {escape(step)}[/dim]")
+    console.print(f"  [dim]" + "─" * (len(title) + 50) + "[/dim]")
     console.print()
 
 

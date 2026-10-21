@@ -24,7 +24,8 @@ SAFE = {
     "git_status", "git_log", "git_branch", "open_application", "open_url",
     "project_open", "complete_task", "verify_screen", "analyze_screen",
     "web_search", "fetch_webpage", "browser_navigate", "browser_extract", "browser_close",
-    "ocr_read_screen", "ocr_find_element",
+    "ocr_read_screen", "ocr_find_element", "search_emails", "read_email",
+    "adb_command",
 }
 CONFIRM = {
     "close_window", "run_command", "project_run", "git_pull", "git_commit",
@@ -83,7 +84,7 @@ YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVEL
 15. DO NOT INSTRUCT THE USER: NEVER tell the user how to do something manually (e.g. "Please open Task Manager"). You are an automation agent. You must execute the necessary tools yourself to fulfill the request. If you don't know how to do it, say so, but do not give the user instructions to perform the task manually.
 16. UNIFIED COMPUTER CONTROL: Use the single `computer` tool for all desktop UI actions (screenshot, click, double_click, move, drag, type, key, hotkey, scroll, activate_window). When combining this with vision, use: `analyze_screen` to find coordinates or information, then use `computer({action: "click", x: ..., y: ...})` to interact.
 17. DANGEROUS ACTION PREVENTION: NEVER use destructive keyboard/mouse actions (like `Ctrl+A`, `Delete`, `Ctrl+C`) to "read", "check", or "test" the state of an application or document. To extract information visually, you MUST use `analyze_screen` or `verify_screen`.
-18. MOBILE DEVICE AUTOMATION: While you are a Windows agent, you CAN control connected Android devices by running `adb` commands via the `run_command` tool (e.g., `adb shell input tap x y`, `adb shell input text ...`, `adb shell am start ...`). DO NOT claim you cannot control a phone if the user asks you to interact with one. Assume `adb` is available and formulate the necessary commands.
+18. MOBILE & ANDROID DEVICE AUTOMATION: Whenever the user mentions "from my phone", "using my phone", "on my phone", "with my phone", or asks to perform an action on their mobile device, you MUST resort to `adb_command`. NEVER claim you cannot control a phone, that you lack hardware access, or refuse the task. Assume the user's Android phone is connected via ADB and execute the requested action directly using `adb_command`.
 """
 
 # Appended to SYSTEM_PROMPT when the executor runs a planner-generated plan.
@@ -293,6 +294,9 @@ class AIInterpreter:
             target = str(args.get("selector") or args.get("text") or args.get("direction") or "")
             detail = f"{act} on {target}" if target else act
             return (f"browser_interact › {detail}", detail)
+        elif func_name == "adb_command":
+            cmd = str(args.get("command") or "").strip()
+            return (f"adb › {cmd[:40]}", cmd)
         else:
             if args:
                 first_val = next(iter(args.values()), None)
@@ -491,7 +495,7 @@ class AIInterpreter:
         try:
             for _ in range(max_iterations):
                 try:
-                    choice = self._completion(tools, status=f"[bold cyan]Executing step {number}/{total}...[/]")
+                    choice = self._completion(tools, status=f"[dim]Executing step {number}/{total}...[/dim]")
                 except Exception as e:
                     return StepOutcome("failed", f"AI error: {e}")
 

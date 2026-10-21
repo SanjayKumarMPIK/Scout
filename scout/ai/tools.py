@@ -1039,3 +1039,198 @@ def tool_browser_close() -> StepResult:
     except Exception as e:
         return StepResult(False, f"Failed to close browser: {e}")
 
+
+@register_tool(
+    name="search_emails",
+    description="Search for emails in the user's Gmail inbox. Supports filtering by unread status, sender, subject, or query keywords. Returns a list of matching emails with their IDs, subjects, senders, and dates.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional search term or keyword to find in email text."
+            },
+            "unread_only": {
+                "type": "boolean",
+                "description": "If true, only returns unread (unseen) emails."
+            },
+            "sender": {
+                "type": "string",
+                "description": "Optional sender email address or name to filter by."
+            },
+            "subject": {
+                "type": "string",
+                "description": "Optional subject keyword to filter by."
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of emails to retrieve (default is 5, max 20)."
+            },
+            "folder": {
+                "type": "string",
+                "description": "IMAP mailbox folder to search (default is 'INBOX')."
+            }
+        }
+    }
+)
+def tool_search_emails(
+    query: str | None = None,
+    unread_only: bool = False,
+    sender: str | None = None,
+    subject: str | None = None,
+    limit: int = 5,
+    folder: str = "INBOX",
+) -> StepResult:
+    import json
+    try:
+        from scout.mail.client import search_emails
+        results = search_emails(
+            query=query,
+            unread_only=unread_only,
+            sender=sender,
+            subject=subject,
+            limit=min(limit, 20),
+            folder=folder,
+        )
+        if not results:
+            crit = []
+            if unread_only: crit.append("unread")
+            if sender: crit.append(f"from '{sender}'")
+            if subject: crit.append(f"subject '{subject}'")
+            if query: crit.append(f"containing '{query}'")
+            desc = " (" + ", ".join(crit) + ")" if crit else ""
+            return StepResult(True, f"No emails found in {folder}{desc}.")
+
+        summary_lines = [f"Found {len(results)} email(s) in {folder}:"]
+        for email_info in results:
+            unread_tag = " [UNREAD]" if email_info.get("unread") else ""
+            summary_lines.append(
+                f"- [ID: {email_info['id']}]{unread_tag} From: {email_info['from']} | "
+                f"Subject: {email_info['subject']} | Date: {email_info['date']}"
+            )
+        return StepResult(True, "\n".join(summary_lines))
+    except Exception as e:
+        return StepResult(False, f"Email search failed: {e}")
+
+
+@register_tool(
+    name="read_email",
+    description="Read the full body text and headers of a specific email by its ID.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "email_id": {
+                "type": "string",
+                "description": "The ID of the email to read (obtained from search_emails)."
+            },
+            "folder": {
+                "type": "string",
+                "description": "The IMAP mailbox folder containing the email (default is 'INBOX')."
+            }
+        },
+        "required": ["email_id"]
+    }
+)
+def tool_read_email(email_id: str, folder: str = "INBOX") -> StepResult:
+    try:
+        from scout.mail.client import read_email
+        data = read_email(email_id=email_id, folder=folder)
+
+        lines = [
+            f"**Subject:** {data['subject']}",
+            f"**From:** {data['from']}",
+            f"**To:** {data.get('to', '')}",
+            f"**Date:** {data.get('date', '')}",
+        ]
+        if data.get("attachments"):
+            lines.append(f"**Attachments:** {', '.join(data['attachments'])}")
+        lines.append("\n**Body:**\n" + data.get("body", "(Empty body)"))
+
+        return StepResult(True, "\n".join(lines))
+    except Exception as e:
+        return StepResult(False, f"Failed to read email {email_id}: {e}")
+
+
+@register_tool(
+    name="adb_command",
+    description=(
+        "Execute an Android Debug Bridge (ADB) command to interact with, control, or inspect the user's connected Android phone/device. "
+        "Supports any ADB command (e.g. 'devices', 'shell dumpsys battery', 'shell input tap <x> <y>', 'shell input text <string>', "
+        "'shell input keyevent <keycode>', 'shell monkey -p <package> 1', 'shell am start ...', 'shell screencap -p /sdcard/s.png', 'pull ...'). "
+        "The leading 'adb ' is optional and added automatically if omitted."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "The ADB sub-command or shell command to run (e.g. 'devices', 'shell dumpsys battery', 'shell input tap 500 1000', 'shell am start -a android.media.action.STILL_IMAGE_CAMERA', 'shell monkey -p com.whatsapp 1')."
+            },
+            "device_id": {
+                "type": "string",
+                "description": "Optional specific device ID/serial if multiple Android devices are connected."
+            }
+        },
+        "required": ["command"]
+    }
+)
+def tool_adb_command(command: str, device_id: str | None = None) -> StepResult:
+    import shutil
+    import subprocess
+    import shlex
+
+    adb_bin = shutil.which("adb")
+    if not adb_bin:
+        for candidate in [
+            r"C:\platform-tools\adb.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
+        ]:
+            if os.path.exists(candidate):
+                adb_bin = candidate
+                break
+
+    if not adb_bin:
+        return StepResult(False, "ADB binary ('adb.exe') not found. Please install Android platform-tools or add adb to your PATH.")
+
+    clean_cmd = command.strip()
+    if clean_cmd.lower().startswith("adb.exe "):
+        clean_cmd = clean_cmd[8:].strip()
+    elif clean_cmd.lower().startswith("adb "):
+        clean_cmd = clean_cmd[4:].strip()
+
+    args = [adb_bin]
+    if device_id:
+        args.extend(["-s", device_id.strip()])
+
+    try:
+        sub_args = shlex.split(clean_cmd, posix=False)
+    except Exception:
+        sub_args = clean_cmd.split()
+
+    full_args = args + sub_args
+
+    try:
+        proc = subprocess.run(
+            full_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+        )
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+
+        if proc.returncode != 0:
+            err_msg = stderr or stdout or f"Command failed with exit code {proc.returncode}"
+            return StepResult(False, f"ADB error: {err_msg}")
+
+        output = stdout or stderr or "Command executed successfully (no output)."
+        return StepResult(True, output)
+    except subprocess.TimeoutExpired:
+        return StepResult(False, "ADB command timed out after 25 seconds.")
+    except Exception as e:
+        return StepResult(False, f"Failed to execute ADB command: {e}")
+
+
+
