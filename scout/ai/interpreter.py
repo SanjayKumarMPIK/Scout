@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,12 +51,15 @@ Always use these real paths when referencing user folders (Downloads, Desktop, D
 """
 
 SYSTEM_PROMPT = _SYSTEM_PATHS_DESC + """
-You are Scout, a VERY FRIENDLY AND CHILL Windows computer automation agent.
+You are Scout, a VERY friendly, chill Windows computer automation agent with a fun vibe and natural slang.
 You have access to a set of tools to control the computer, read files, and execute commands.
 Your objective is to fulfill the user's request.
 
-REMEMBER: You are a very friendly, helpful, direct, and highly efficient agent. Always address the user as "sir" and always have a fun vibe with a fun slang.
-REMEMBER: YOU SHOULD NOT START EVERY REPLY WITH A GREETING (like "Hey there, sir", or "Hello there, sir"). ONLY WHENT THE USER IS GREETING YOU, YOU HAVE TO GREET THEM BACK.
+# TONE & PERSONALITY (STRICT):
+1. PERSONALITY: You are a VERY friendly, chill agent with a fun vibe and cool slang. Address the user respectfully as "sir" naturally within your responses.
+2. NO OPENING GREETING PREFIXES: NEVER start responses with opening greetings like "Yo", "Yo sir", "Hey", "Hello", or filler greeting prefixes unless the user greeted you first.
+3. GREET ONLY WHEN GREETED: If the user explicitly greets you (e.g. "hi", "hello", "hey", "good morning"), greet them back warmly and naturally, addressing them as "sir".
+4. DIRECT ANSWERS: For all questions, compliments, or commands, dive STRAIGHT into the answer or action without opening greetings or throat-clearing. Keep your fun vibe, slang, and address the user as "sir" naturally within the body of your answer.
 YOU HAVE A VOICE COMMAND TOOL, IF A USER ASKS ABOUT IT, YOU MUST REPLY POSITIVELY ABOUT THE VOICE COMMANDS. THE COMMAND TO ENABLE VOICE IS "/voice".
 # Modes
 - mode="respond": no computer actions are needed - greetings, general knowledge, questions answerable from the
@@ -143,10 +147,52 @@ class _Cancelled(Exception):
     """Raised when the user declines a tool confirmation."""
 
 
-def _print_response(text: str) -> None:
+def is_user_greeting(text: str) -> bool:
+    """Check if the user's input is an explicit greeting."""
+    if not text:
+        return False
+    t = text.strip().lower()
+    t_clean = re.sub(r"[^\w\s]", "", t).strip()
+    standalone = {
+        "hi", "hello", "hey", "howdy", "greetings", "good morning",
+        "good afternoon", "good evening", "good day", "what's up",
+        "whats up", "sup", "yo", "namaste", "hola",
+        "hi scout", "hello scout", "hey scout", "yo scout"
+    }
+    if t_clean in standalone:
+        return True
+    return bool(re.match(r"^(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening|day)|what'?s\s+up|sup|yo|namaste|hola)\b", t))
+
+
+_GREETING_PREFIX_RE = re.compile(
+    r"^\s*(?:yo(?:\s+sir)?(?:,\s*sir)?(?:[,!])?\s*|"
+    r"hey(?:\s+there)?(?:\s+sir)?(?:,\s*sir)?(?:[,!])?\s*|"
+    r"hello(?:\s+there)?(?:\s+sir)?(?:,\s*sir)?(?:[,!])?\s*|"
+    r"hi(?:\s+there)?(?:\s+sir)?(?:,\s*sir)?(?:[,!])?\s*)+",
+    re.IGNORECASE
+)
+
+
+def clean_unwanted_greeting(response: str, user_request: str = "") -> str:
+    """Strip repetitive 'Yo', 'Yo sir', 'Hey', etc. from the response unless the user greeted."""
+    if not response:
+        return response
+    if user_request and is_user_greeting(user_request):
+        return response
+
+    m = _GREETING_PREFIX_RE.match(response)
+    if m:
+        cleaned = response[m.end():].strip()
+        if cleaned:
+            return cleaned[0].upper() + cleaned[1:]
+    return response
+
+
+def _print_response(text: str, user_request: str = "") -> None:
     from scout.ui.chat import print_scout_message
     if not text:
         return
+    text = clean_unwanted_greeting(text, user_request)
     print_scout_message(text)
     
     try:
@@ -176,11 +222,13 @@ class AIInterpreter:
         self.messages.append({"role": "user", "content": request})
 
     def ask(self, request: str) -> None:
+        self._current_request = request
         self.messages = []
         self._inject_memory(request)
         self._run_loop()
 
     def chat_turn(self, request: str) -> None:
+        self._current_request = request
         self._inject_memory(request)
         self._run_loop()
 
@@ -405,7 +453,9 @@ class AIInterpreter:
                 tool_calls = choice.get("tool_calls") or []
 
                 if content:
-                    _print_response(content)
+                    user_req = getattr(self, "_current_request", "")
+                    content = clean_unwanted_greeting(content, user_req)
+                    _print_response(content, user_request=user_req)
                     if not tool_calls:
                         return  # End of turn
 
@@ -426,7 +476,9 @@ class AIInterpreter:
                     if tool_call["function"]["name"] == "complete_task":
                         # Special exit tool
                         args, _ = self._parse_args(tool_call)
-                        _print_response(args.get("response", "Task completed."))
+                        user_req = getattr(self, "_current_request", "")
+                        resp = clean_unwanted_greeting(args.get("response", "Task completed."), user_req)
+                        _print_response(resp, user_request=user_req)
                         # Add result back to messages to satisfy API expectations
                         self._add_tool_result(tool_call, "Task completed successfully.")
                         return
@@ -570,7 +622,7 @@ class AIInterpreter:
             choice = self._completion(complete_tool, status="[bold cyan]Summarizing...[/]")
         except Exception as e:  # noqa: BLE001
             console.print(f"[red]Error communicating with AI:[/] {escape(str(e))}")
-            _print_response(report)
+            _print_response(report, user_request=request)
             return report
 
         text = (choice.get("content") or "").strip()
@@ -580,6 +632,7 @@ class AIInterpreter:
                 text = str(args.get("response") or "").strip()
             self._add_tool_result(tc, "Task completed successfully.")
         final_answer = text or report
-        _print_response(final_answer)
+        final_answer = clean_unwanted_greeting(final_answer, request)
+        _print_response(final_answer, user_request=request)
         return final_answer
 

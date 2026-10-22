@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path when running script directly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pytest
 from scout.ai.provider import AIProvider
 
@@ -181,5 +187,104 @@ def test_tool_read_and_search_file(tmp_path):
     assert "Natural Resources Management" in search_res.message
     assert "Prof. Sudip Mitra" in search_res.message
     assert "Oct 17, 2026" in search_res.message
+
+
+def test_is_user_greeting():
+    from scout.ai.interpreter import is_user_greeting
+
+    # Explicit greetings
+    assert is_user_greeting("hello") is True
+    assert is_user_greeting("Hello") is True
+    assert is_user_greeting("hi scout") is True
+    assert is_user_greeting("hey there!") is True
+    assert is_user_greeting("good morning scout") is True
+    assert is_user_greeting("Yo scout") is True
+
+    # Non-greeting questions and statements (must be False)
+    assert is_user_greeting("can you dream scout?") is False
+    assert is_user_greeting("do you have conciousness?") is False
+    assert is_user_greeting("I cannot believe i created you, you are so good") is False
+    assert is_user_greeting("open notepad") is False
+    assert is_user_greeting("what is the weather today?") is False
+
+
+def test_clean_unwanted_greeting():
+    from scout.ai.interpreter import clean_unwanted_greeting
+
+    # Non-greeting questions: "Yo", "Yo sir", etc. must be stripped
+    assert clean_unwanted_greeting(
+        "Yo, sir, I don't actually dream like humans do.", 
+        user_request="can you dream scout?"
+    ) == "I don't actually dream like humans do."
+
+    assert clean_unwanted_greeting(
+        "Yo sir, I don't have consciousness or a mind of my own.", 
+        user_request="do you have conciousness?"
+    ) == "I don't have consciousness or a mind of my own."
+
+    assert clean_unwanted_greeting(
+        "Yo, thanks a ton, Sanjay! I'm stoked you think I'm that good.", 
+        user_request="I cannot believe i created you, you are so good"
+    ) == "Thanks a ton, Sanjay! I'm stoked you think I'm that good."
+
+    assert clean_unwanted_greeting(
+        "Hey there, sir, here are the search results.", 
+        user_request="search python news"
+    ) == "Here are the search results."
+
+    # When user explicitly greets, greeting is preserved
+    assert clean_unwanted_greeting(
+        "Hello Sanjay! How can I help you today?", 
+        user_request="Hello"
+    ) == "Hello Sanjay! How can I help you today?"
+
+    assert clean_unwanted_greeting(
+        "Hey! Good to see you.", 
+        user_request="hi scout"
+    ) == "Hey! Good to see you."
+
+    # Direct answers without greetings remain completely unchanged
+    assert clean_unwanted_greeting(
+        "The current memory usage is 45%.", 
+        user_request="check system info"
+    ) == "The current memory usage is 45%."
+
+
+def test_prompts_tone_and_greeting_rules():
+    from scout.ai.planner import PLANNER_PROMPT
+    from scout.ai.interpreter import SYSTEM_PROMPT
+
+    for prompt in (PLANNER_PROMPT, SYSTEM_PROMPT):
+        assert "fun vibe" in prompt
+        assert 'Address the user respectfully as "sir"' in prompt
+        assert "NO OPENING GREETING PREFIXES" in prompt
+        assert 'NEVER start responses with opening greetings like "Yo"' in prompt
+
+
+def test_orchestrator_respond_mode_cleans_yo_sir():
+    from unittest.mock import MagicMock
+    from scout.ai.orchestrator import run_planned_turn
+    from scout.ai.planner import Plan
+    from scout.ai.interpreter import AIInterpreter
+
+    mock_planner = MagicMock()
+    mock_planner.generate_plan.return_value = Plan(
+        mode="respond", 
+        response="Yo, sir, I don't actually dream like humans do—I'm a code-powered scout."
+    )
+
+    mock_provider = MockProvider([])
+    interpreter = AIInterpreter(mock_provider)
+
+    run_planned_turn(interpreter, mock_planner, "can you dream scout?")
+
+    assert len(interpreter.messages) == 2
+    assert interpreter.messages[0] == {"role": "user", "content": "can you dream scout?"}
+    # "Yo, sir, " must be cleanly stripped and first letter capitalized
+    assert interpreter.messages[1] == {
+        "role": "assistant", 
+        "content": "I don't actually dream like humans do—I'm a code-powered scout."
+    }
+
 
 

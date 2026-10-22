@@ -157,20 +157,13 @@ class MemoryStore:
         if query:
             results = self.search(query)
             seen = set()
-            for r in results[:10]: # Increased from 5
+            for r in results[:5]:
                 if r["category"] == "user_profile":
                     continue  # Already included above
                 entry = f"{r['key']}: {r['value']}"
                 if entry not in seen:
                     seen.add(entry)
                     lines.append(entry)
-
-        # Include all general preferences (up to a safe limit of 30 so we don't blow up context)
-        prefs = self.get_by_category("preferences")
-        for p in prefs[:30]:
-            entry = f"Preference: {p['key']} = {p['value']}"
-            if entry not in lines:
-                lines.append(entry)
 
         if not lines:
             return ""

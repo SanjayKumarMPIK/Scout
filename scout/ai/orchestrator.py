@@ -15,7 +15,7 @@ from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
 
-from scout.ai.interpreter import AIInterpreter, StepOutcome, _print_response
+from scout.ai.interpreter import AIInterpreter, StepOutcome, _print_response, clean_unwanted_greeting
 from scout.ai.planner import Plan, Planner, PlanStep
 
 console = Console()
@@ -23,7 +23,7 @@ console = Console()
 MAX_REPLANS = 2
 
 
-def build_chat_history(messages: list[dict], limit: int = 30) -> list[dict]:
+def build_chat_history(messages: list[dict], limit: int = 12) -> list[dict]:
     """Reconstruct a clean chat history for the planner from the raw interpreter messages."""
     history = []
     for msg in messages[-limit:]:
@@ -66,6 +66,7 @@ def build_chat_history(messages: list[dict], limit: int = 30) -> list[dict]:
                         text = str(args.get("response") or "").strip()
                         break
             if text:
+                text = clean_unwanted_greeting(text)
                 history.append({"role": "assistant", "content": text})
     
     return history
@@ -96,10 +97,11 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
 
     # Direct answer: nothing to execute, so nothing can diverge.
     if plan.mode == "respond":
-        _print_response(plan.response)
+        cleaned_response = clean_unwanted_greeting(plan.response, request)
+        _print_response(cleaned_response, user_request=request)
         interpreter.messages = chat_history + [
             {"role": "user", "content": request},
-            {"role": "assistant", "content": plan.response},
+            {"role": "assistant", "content": cleaned_response},
         ]
         return
 
@@ -149,7 +151,7 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         _show_plan(revised.steps, "Revised Plan", start=number + 1)
         queue = list(revised.steps)
 
-        if not queue and replans < MAX_REPLANS:
+        if not queue and 0 < replans < MAX_REPLANS:
             report = _report(history)
             check_prompt = (
                 f"Original Request: {request}\n\n"
@@ -179,37 +181,39 @@ def run_planned_turn(interpreter: AIInterpreter, planner: Planner, request: str)
         {"role": "assistant", "content": final_response or report},
     ]
     
-    # Automatically learn facts into memory
-    with console.status("[bold cyan]Extracting memory...[/]"):
-        try:
-            from scout.memory.store import get_memory_store
-            mem_prompt = (
-                f"User Request: {request}\n"
-                f"Execution Result:\n{report}\n\n"
-                "Did the user state any facts, preferences, or personal details that should be remembered for future interactions? "
-                "Respond ONLY with a JSON array of objects in this format: "
-                '[{"key": "user_name", "value": "Alice"}, {"key": "likes_dark_mode", "value": "yes"}]. '
-                "Return an empty array [] if there is nothing to remember."
-            )
-            # Use planner's provider for memory extraction
-            mem_response = planner.provider.chat_completion(
-                "You are a memory extraction assistant. Output strictly JSON.",
-                [{"role": "user", "content": mem_prompt}],
-                []
-            )
-            mem_text = mem_response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            
-            # Find JSON array
-            import json
-            import re
-            match = re.search(r'\[.*\]', mem_text, re.DOTALL)
-            if match:
-                facts = json.loads(match.group(0))
-                if facts:
-                    store = get_memory_store()
-                    for fact in facts:
-                        store.save("preferences", fact["key"], fact["value"])
-                    console.print(f"[dim]Learned {len(facts)} new fact(s) into memory.[/dim]")
-        except Exception:
-            pass # Fail silently for memory extraction
+    # Automatically learn facts into memory (only when user shares personal facts/preferences)
+    _FACT_TRIGGERS = ("my ", "i am ", "i'm ", "i live ", "i prefer ", "remember ", "save ", "call me ", "prefer ", "i like ", "my name ")
+    if any(t in request.lower() for t in _FACT_TRIGGERS):
+        with console.status("[bold cyan]Extracting memory...[/]"):
+            try:
+                from scout.memory.store import get_memory_store
+                mem_prompt = (
+                    f"User Request: {request}\n"
+                    f"Execution Result:\n{report}\n\n"
+                    "Did the user state any facts, preferences, or personal details that should be remembered for future interactions? "
+                    "Respond ONLY with a JSON array of objects in this format: "
+                    '[{"key": "user_name", "value": "Alice"}, {"key": "likes_dark_mode", "value": "yes"}]. '
+                    "Return an empty array [] if there is nothing to remember."
+                )
+                # Use planner's provider for memory extraction
+                mem_response = planner.provider.chat_completion(
+                    "You are a memory extraction assistant. Output strictly JSON.",
+                    [{"role": "user", "content": mem_prompt}],
+                    []
+                )
+                mem_text = mem_response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                
+                # Find JSON array
+                import json
+                import re
+                match = re.search(r'\[.*\]', mem_text, re.DOTALL)
+                if match:
+                    facts = json.loads(match.group(0))
+                    if facts:
+                        store = get_memory_store()
+                        for fact in facts:
+                            store.save("preferences", fact["key"], fact["value"])
+                        console.print(f"[dim]Learned {len(facts)} new fact(s) into memory.[/dim]")
+            except Exception:
+                pass # Fail silently for memory extraction
 
