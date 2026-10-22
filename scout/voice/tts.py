@@ -174,6 +174,58 @@ def _start_voice_barge_in():
     t.start()
 
 
+def filter_urls(text: str) -> str:
+    """Filter out URLs, web links (starting with https, http, www, file), and markdown link URLs so TTS does not read them aloud."""
+    if not text:
+        return text
+
+    # 1. Handle markdown links: [label](url) -> keep descriptive label, drop URL
+    def _md_link_sub(match):
+        label = match.group(1).strip()
+        # If the label itself is a link (e.g. [https://...](https://...)), drop everything
+        if re.match(r'^(?:https?://|www\.|file:///)', label, re.IGNORECASE):
+            return ''
+        return label
+
+    text = re.sub(
+        r'\[([^\]]+)\]\(((?:https?://|www\.|file:///)[^\)]*)\)',
+        _md_link_sub,
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # 2. Filter standalone URLs starting with http://, https://, www., file:///
+    url_pattern = re.compile(
+        r'<?\b(?:https?://|www\.|file:///)[^\s<>"\')\]]+>?',
+        re.IGNORECASE
+    )
+
+    def _url_sub(match):
+        val = match.group(0)
+        # Preserve trailing sentence punctuation if directly attached to the URL
+        punct = ""
+        while val and val[-1] in ".,!?;:":
+            punct = val[-1] + punct
+            val = val[:-1]
+        return punct
+
+    text = url_pattern.sub(_url_sub, text)
+
+    # 3. Clean up dangling colons or dashes before removed URLs (e.g. 'Link: ' -> 'Link.')
+    text = re.sub(r'[:\-–—]\s*(?=[,\.!\?\n]|$)', '.', text)
+
+    # 4. Clean up empty brackets/parentheses left behind
+    text = re.sub(r'\(\s*\)', '', text)
+    text = re.sub(r'\[\s*\]', '', text)
+
+    # 5. Clean up multiple spaces and punctuation artifacts
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\s+([,\.!\?])', r'\1', text)
+    text = re.sub(r'([,\.!\?]){2,}', r'\1', text)
+
+    return text.strip()
+
+
 def _tts_worker():
     import sounddevice as sd
     global _current_stream, _is_speaking
@@ -207,6 +259,9 @@ def _tts_worker():
             clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_text)
             clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
             
+            # Filter out URLs and links so TTS doesn't read out "https...", "www...", etc.
+            clean_text = filter_urls(clean_text)
+            
             # Remove emojis so the TTS doesn't read out "smiling face with sunglasses"
             try:
                 import emoji
@@ -227,7 +282,7 @@ def _tts_worker():
             clean_text = re.sub(r"\bI'm\b", "I am", clean_text, flags=re.IGNORECASE)
             
             sentences = re.split(r'(?<=[.!?\n])\s+', clean_text.strip())
-            sentences = [s.strip() for s in sentences if s.strip()]
+            sentences = [s.strip() for s in sentences if s.strip() and re.sub(r'^[.,!?;:\s]+$', '', s.strip())]
             
             if not sentences or _stop_event.is_set():
                 _tts_queue.task_done()

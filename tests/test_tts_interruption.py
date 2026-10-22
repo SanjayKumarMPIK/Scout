@@ -66,3 +66,41 @@ def test_barge_in_starts_when_enabled():
         with patch("threading.Thread") as mock_thread:
             tts_mod._start_voice_barge_in()
             mock_thread.assert_called_once()
+
+
+def test_filter_urls_removes_https_and_http():
+    from scout.voice.tts import filter_urls
+
+    text = "Visit https://www.google.com for more details."
+    assert filter_urls(text) == "Visit for more details."
+
+    text_http = "Check out http://example.org/path/page.html here."
+    assert filter_urls(text_http) == "Check out here."
+
+
+def test_filter_urls_removes_www():
+    from scout.voice.tts import filter_urls
+
+    text = "Go to www.youtube.com/watch?v=123 now!"
+    assert filter_urls(text) == "Check out now!" or "now!" in filter_urls(text)
+    assert "www.youtube.com" not in filter_urls(text)
+
+
+def test_filter_urls_handles_markdown_links():
+    from scout.voice.tts import filter_urls
+
+    # Descriptive label kept, URL removed
+    md_text = "Read the [Python Docs](https://docs.python.org/3/) for guides."
+    assert filter_urls(md_text) == "Read the Python Docs for guides."
+
+    # URL-only label completely removed
+    raw_md = "See [https://google.com](https://google.com) right here."
+    assert filter_urls(raw_md) == "See right here."
+
+
+def test_filter_urls_cleans_dangling_colons_and_whitespace():
+    from scout.voice.tts import filter_urls
+
+    text = "Here is the link: https://github.com/SanjayKumarMPIK."
+    assert filter_urls(text) == "Here is the link."
+    assert "https" not in filter_urls(text)
